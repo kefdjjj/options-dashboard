@@ -30,11 +30,9 @@ class ErrorBoundary extends Component {
   }
 }
 
-const calculateSubpaneMargins = (index) => {
-  const paneHeight = 0.15;
-  const bottom = index * paneHeight;
-  const top = 1 - (bottom + paneHeight);
-  return { top, bottom };
+const calculateSubpaneMargins = (currentBottom, paneHeight = 0.15) => {
+  const top = 1 - (currentBottom + paneHeight);
+  return { top, bottom: currentBottom };
 };
 
 const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
@@ -82,7 +80,7 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       upColor: '#22c55e', downColor: '#ef4444', borderVisible: false, wickUpColor: '#22c55e', wickDownColor: '#ef4444'
     });
 
-    let currentBottomPaneIndex = 0;
+    let currentBottomOffset = 0;
 
     if (indicators.vwap) {
       seriesRefs.current.vwap = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, title: 'VWAP' });
@@ -92,25 +90,29 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
     }
 
     if (indicators.rsi) {
-      const margins = calculateSubpaneMargins(currentBottomPaneIndex++);
+      const margins = calculateSubpaneMargins(currentBottomOffset, 0.15);
+      currentBottomOffset += 0.15;
       chart.priceScale('rsi').applyOptions({ scaleMargins: margins });
       seriesRefs.current.rsi = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, title: 'RSI (14)', priceScaleId: 'rsi' });
     }
 
     if (indicators.macd) {
-      const margins = calculateSubpaneMargins(currentBottomPaneIndex++);
+      const margins = calculateSubpaneMargins(currentBottomOffset, 0.15);
+      currentBottomOffset += 0.15;
       chart.priceScale('macd').applyOptions({ scaleMargins: margins });
       seriesRefs.current.hist = chart.addSeries(HistogramSeries, { priceScaleId: 'macd' });
     }
 
     if (indicators.adx) {
-      const margins = calculateSubpaneMargins(currentBottomPaneIndex++);
+      const margins = calculateSubpaneMargins(currentBottomOffset, 0.15);
+      currentBottomOffset += 0.15;
       chart.priceScale('adx').applyOptions({ scaleMargins: margins });
       seriesRefs.current.adx = chart.addSeries(LineSeries, { color: '#ec4899', lineWidth: 2, title: 'ADX (14)', priceScaleId: 'adx' });
     }
 
     if (indicators.ewo) {
-      const margins = calculateSubpaneMargins(currentBottomPaneIndex++);
+      const margins = calculateSubpaneMargins(currentBottomOffset, 0.08); // Make EWO smaller (8%)
+      currentBottomOffset += 0.08;
       chart.priceScale('ewo').applyOptions({ scaleMargins: margins });
       seriesRefs.current.ewo = chart.addSeries(HistogramSeries, { priceScaleId: 'ewo', title: 'EWO (5, 35)' });
     }
