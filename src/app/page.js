@@ -50,6 +50,7 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const elliottLineRef = useRef(null);
   const rsiDivMarkersRef = useRef(null);
   const iezMarkersRef = useRef(null);
+  const rbtMarkersRef = useRef(null);
   
   const pvzMarkersRef = useRef(null);
   
@@ -183,6 +184,7 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       elliottLineRef.current = null;
       rsiDivMarkersRef.current = null;
       iezMarkersRef.current = null;
+      rbtMarkersRef.current = null;
       
       if (pvzMarkersRef.current) pvzMarkersRef.current.setMarkers([]);
       pvzMarkersRef.current = null;
@@ -716,6 +718,27 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       if (iezMarkersRef.current) iezMarkersRef.current.setMarkers([]);
     }
 
+    if (indicators.rbt && rawData.length > 1) {
+      let markers = [];
+      const opens = []; const closes = []; const highs = []; const lows = [];
+      rawData.forEach(c => { opens.push(c.open); highs.push(c.high); lows.push(c.low); closes.push(c.close); });
+      for (let i = 1; i < closes.length; i++) {
+        const prevC = closes[i - 1]; const prevO = opens[i - 1];
+        const prevH = highs[i - 1]; const prevL = lows[i - 1];
+        const curC = closes[i];
+        
+        if (prevC < prevO && curC > prevH) {
+          markers.push({ time: rawData[i].time, position: 'belowBar', color: '#089981', shape: 'arrowUp', text: 'BUY (RBT)' });
+        } else if (prevC > prevO && curC < prevL) {
+          markers.push({ time: rawData[i].time, position: 'aboveBar', color: '#f23645', shape: 'arrowDown', text: 'SELL (RBT)' });
+        }
+      }
+      if (!rbtMarkersRef.current) rbtMarkersRef.current = createSeriesMarkers(seriesRefs.current.candle, markers);
+      else rbtMarkersRef.current.setMarkers(markers);
+    } else {
+      if (rbtMarkersRef.current) rbtMarkersRef.current.setMarkers([]);
+    }
+
   }, [haData, rawData, indicators, chartType]);
 
   return <div ref={chartContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }} />;
@@ -826,7 +849,7 @@ const calculateSignals = (rawCandles) => {
   if (totalVol === 0) volumes.fill(1);
   const currentClose = closes[closes.length - 1];
   
-  let newSignals = { rsi: 'NEUTRAL', macd: 'NEUTRAL', vwap: 'NEUTRAL', mavwap: 'NEUTRAL', adx: 'WEAK', ewo: 'NEUTRAL', utbot: 'NEUTRAL', rsiDiv: 'NEUTRAL', iez: 'NEUTRAL' };
+  let newSignals = { rsi: 'NEUTRAL', macd: 'NEUTRAL', vwap: 'NEUTRAL', mavwap: 'NEUTRAL', adx: 'WEAK', ewo: 'NEUTRAL', utbot: 'NEUTRAL', rsiDiv: 'NEUTRAL', iez: 'NEUTRAL', rbt: 'NEUTRAL' };
   let newVals = { rsi: null, macd: null, vwap: null, mavwap: null, adx: null };
   
   const rsiRes = RSI.calculate({ values: closes, period: 14 });
@@ -851,11 +874,19 @@ const calculateSignals = (rawCandles) => {
      const prevEwo = ewo5.length > 1 ? ewo5[ewo5.length - 2] - ewo35[ewo35.length - 2] : 0;
      if (curEwo > 0 && curEwo >= prevEwo) newSignals.ewo = 'STRONG UPWARD';
      else if (curEwo > 0 && curEwo < prevEwo) newSignals.ewo = 'WEAK UPWARD';
-     else if (curEwo < 0 && curEwo < prevEwo) newSignals.ewo = 'STRONG DOWNWARD';
-     else if (curEwo < 0 && curEwo >= prevEwo) newSignals.ewo = 'WEAK DOWNWARD';
-  }
-  
-  const atrRes = ATR.calculate({ high: highs, low: lows, close: closes, period: 10 });
+      else if (curEwo < 0 && curEwo < prevEwo) newSignals.ewo = 'STRONG DOWNWARD';
+      else if (curEwo < 0 && curEwo >= prevEwo) newSignals.ewo = 'WEAK DOWNWARD';
+   }
+   
+   if (closes.length >= 2) {
+      const prevC = closes[closes.length - 2]; const prevO = opens[closes.length - 2];
+      const prevH = highs[closes.length - 2]; const prevL = lows[closes.length - 2];
+      const curC = closes[closes.length - 1];
+      if (prevC < prevO && curC > prevH) newSignals.rbt = 'BUY';
+      else if (prevC > prevO && curC < prevL) newSignals.rbt = 'SELL';
+   }
+
+   const atrRes = ATR.calculate({ high: highs, low: lows, close: closes, period: 10 });
   let prevStop = 0; let prevPos = 0;
   const atrOffset = closes.length - atrRes.length;
   for (let i = atrOffset; i < closes.length; i++) {
@@ -1009,8 +1040,14 @@ const SignalBoard = ({ title, signals, values }) => {
           <span className={`badge ${signals.rsiDiv?.includes('BULLISH') ? 'bullish' : signals.rsiDiv?.includes('BEARISH') ? 'bearish' : 'neutral'}`}>{signals.rsiDiv}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>IEZ</span>
-          <span className={`badge ${signals.iez?.includes('BUY') ? 'bullish' : signals.iez?.includes('SELL') ? 'bearish' : 'neutral'}`}>{signals.iez}</span>
+          <div className="flex flex-col">
+            <span className="text-xs text-slate-500 dark:text-slate-400 mb-1">IEZ</span>
+            <span className={`badge ${signals.iez?.includes('BUY') ? 'bullish' : signals.iez?.includes('SELL') ? 'bearish' : 'neutral'}`}>{signals.iez}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-xs text-slate-500 dark:text-slate-400 mb-1">Red Bar Theory</span>
+            <span className={`badge ${signals.rbt?.includes('BUY') ? 'bullish' : signals.rbt?.includes('SELL') ? 'bearish' : 'neutral'}`}>{signals.rbt || 'NEUTRAL'}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1094,7 +1131,7 @@ export default function Dashboard() {
   const [tempTokenInput, setTempTokenInput] = useState('');
   
   const [indicators, setIndicators] = useState({
-    rsi: true, macd: true, vwap: false, mavwap: false, utbot: false, utbot3: false, fib: false, elliott: false, pvz: false, smc: false, rsiDiv: false, iez: false
+    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false
   });
   
   const [theme, setTheme] = useState('dark');
@@ -1784,6 +1821,14 @@ export default function Dashboard() {
                   <span>Pullback Value Zone (PVZ)</span>
                   <input type="checkbox" checked={indicators.pvz} onChange={() => toggleIndicator('pvz')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
                 </div>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.iez} onChange={() => toggleIndicator('iez')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>Institutional Engulfing</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.rbt} onChange={() => toggleIndicator('rbt')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>Red Bar Theory (RBT)</span>
+                </label>
                 <label className="flex items-center space-x-3 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 p-2 rounded-lg transition-colors">
                   <input type="checkbox" checked={indicators.iez} onChange={() => toggleIndicator('iez')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
                   <span className="font-medium text-slate-700 dark:text-slate-300" style={{ fontWeight: 'bold', color: '#a855f7' }}>Institutional Trading Zone (IEZ)</span>
