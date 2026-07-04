@@ -90,6 +90,11 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       }
     }
 
+    if (indicators.ema) {
+      seriesRefs.current.ema9 = chart.addSeries(LineSeries, { color: '#fbbf24', lineWidth: 2, title: 'EMA (9)' });
+      seriesRefs.current.ema21 = chart.addSeries(LineSeries, { color: '#f97316', lineWidth: 2, title: 'EMA (21)' });
+    }
+
     if (indicators.rsi) {
       const margins = calculateSubpaneMargins(currentBottomOffset, 0.15);
       currentBottomOffset += 0.15;
@@ -217,6 +222,20 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
         mavwapResult.forEach((val, i) => { mavwapLineData.push({ time: rawData[i + maOffset].time, value: val }); });
         seriesRefs.current.mavwap.setData(mavwapLineData);
       }
+    }
+
+    if (indicators.ema && seriesRefs.current.ema9 && seriesRefs.current.ema21) {
+      const ema9Data = [];
+      const ema9Result = EMA.calculate({ period: 9, values: closes });
+      const offset9 = rawData.length - ema9Result.length;
+      ema9Result.forEach((val, i) => { if (!isNaN(val) && val !== null) ema9Data.push({ time: rawData[i + offset9].time, value: val }); });
+      seriesRefs.current.ema9.setData(ema9Data);
+
+      const ema21Data = [];
+      const ema21Result = EMA.calculate({ period: 21, values: closes });
+      const offset21 = rawData.length - ema21Result.length;
+      ema21Result.forEach((val, i) => { if (!isNaN(val) && val !== null) ema21Data.push({ time: rawData[i + offset21].time, value: val }); });
+      seriesRefs.current.ema21.setData(ema21Data);
     }
 
     if (indicators.rsi && seriesRefs.current.rsi) {
@@ -1131,7 +1150,7 @@ export default function Dashboard() {
   const [tempTokenInput, setTempTokenInput] = useState('');
   
   const [indicators, setIndicators] = useState({
-    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false
+    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false
   });
   
   const [theme, setTheme] = useState('dark');
@@ -1828,6 +1847,10 @@ export default function Dashboard() {
                 <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
                   <input type="checkbox" checked={indicators.rbt} onChange={() => toggleIndicator('rbt')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
                   <span>Red Bar Theory (RBT)</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.ema} onChange={() => toggleIndicator('ema')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>9 & 21 EMA</span>
                 </label>
                 <label className="flex items-center space-x-3 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 p-2 rounded-lg transition-colors">
                   <input type="checkbox" checked={indicators.iez} onChange={() => toggleIndicator('iez')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
