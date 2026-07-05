@@ -39,6 +39,9 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const chartContainerRef = useRef();
   const chartInstance = useRef(null);
   const seriesRefs = useRef({});
+  const [drawMode, setDrawMode] = useState('none');
+  const hLinesRef = useRef([]);
+  const vLineDataRef = useRef([]);
   const overlayRef = useRef(null);
   const blockElementsRef = useRef([]);
   const fibLinesRef = useRef([]);
@@ -122,6 +125,15 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       chart.priceScale('ewo').applyOptions({ scaleMargins: margins });
       seriesRefs.current.ewo = chart.addSeries(HistogramSeries, { priceScaleId: 'ewo', title: 'EWO (5, 35)' });
     }
+
+    seriesRefs.current.vLines = chart.addSeries(HistogramSeries, {
+      color: theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.15)',
+      priceScaleId: 'vlines',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    chart.priceScale('vlines').applyOptions({ visible: false, autoScale: false });
 
     if (!overlayRef.current) {
         const div = document.createElement('div');
@@ -222,6 +234,16 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
         mavwapResult.forEach((val, i) => { mavwapLineData.push({ time: rawData[i + maOffset].time, value: val }); });
         seriesRefs.current.mavwap.setData(mavwapLineData);
       }
+    }
+
+    if (seriesRefs.current.vLines) {
+      const vData = [];
+      rawData.forEach(d => {
+         if (vLineDataRef.current.includes(d.time)) {
+            vData.push({ time: d.time, value: 1, color: theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.15)' });
+         }
+      });
+      seriesRefs.current.vLines.setData(vData);
     }
 
     if (indicators.ema && seriesRefs.current.ema9 && seriesRefs.current.ema21) {
@@ -760,7 +782,56 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
 
   }, [haData, rawData, indicators, chartType]);
 
-  return <div ref={chartContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }} />;
+  useEffect(() => {
+    if (!chartInstance.current) return;
+    const clickHandler = (param) => {
+      if (!param.point || !param.time || drawMode === 'none') return;
+      if (drawMode === 'horizontal' && seriesRefs.current.candle) {
+        const price = seriesRefs.current.candle.coordinateToPrice(param.point.y);
+        if (price !== null) {
+          const line = seriesRefs.current.candle.createPriceLine({
+            price: price, color: theme === 'dark' ? 'rgba(234, 179, 8, 0.8)' : 'rgba(202, 138, 4, 0.8)',
+            lineWidth: 2, lineStyle: 2, axisLabelVisible: true,
+          });
+          hLinesRef.current.push(line);
+        }
+      } else if (drawMode === 'vertical') {
+        if (!vLineDataRef.current.includes(param.time)) {
+           vLineDataRef.current.push(param.time);
+           const vData = [];
+           rawData.forEach(d => {
+             if (vLineDataRef.current.includes(d.time)) {
+                vData.push({ time: d.time, value: 1, color: theme === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.15)' });
+             }
+           });
+           if (seriesRefs.current.vLines) seriesRefs.current.vLines.setData(vData);
+        }
+      }
+    };
+    chartInstance.current.subscribeClick(clickHandler);
+    return () => { if (chartInstance.current) chartInstance.current.unsubscribeClick(clickHandler); };
+  }, [drawMode, theme, rawData]);
+
+  const clearDrawings = () => {
+    if (hLinesRef.current && seriesRefs.current.candle) {
+      hLinesRef.current.forEach(line => seriesRefs.current.candle.removePriceLine(line));
+      hLinesRef.current = [];
+    }
+    vLineDataRef.current = [];
+    if (seriesRefs.current.vLines) seriesRefs.current.vLines.setData([]);
+  };
+
+  return (
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 10, display: 'flex', gap: '5px', background: theme === 'dark' ? 'rgba(30, 41, 59, 0.8)' : 'rgba(255, 255, 255, 0.8)', padding: '4px', borderRadius: '6px', backdropFilter: 'blur(4px)' }}>
+        <button onClick={() => setDrawMode('none')} style={{ background: drawMode === 'none' ? '#3b82f6' : 'transparent', color: drawMode === 'none' ? '#fff' : (theme === 'dark' ? '#cbd5e1' : '#475569'), border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }} title="Cursor">👆</button>
+        <button onClick={() => setDrawMode('horizontal')} style={{ background: drawMode === 'horizontal' ? '#3b82f6' : 'transparent', color: drawMode === 'horizontal' ? '#fff' : (theme === 'dark' ? '#cbd5e1' : '#475569'), border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }} title="H-Line">—</button>
+        <button onClick={() => setDrawMode('vertical')} style={{ background: drawMode === 'vertical' ? '#3b82f6' : 'transparent', color: drawMode === 'vertical' ? '#fff' : (theme === 'dark' ? '#cbd5e1' : '#475569'), border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }} title="V-Line">|</button>
+        <button onClick={clearDrawings} style={{ background: 'transparent', color: '#ef4444', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }} title="Clear">🗑️</button>
+      </div>
+      <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
+    </div>
+  );
 };
 
 const formatHeikinAshi = (rawCandles) => {
