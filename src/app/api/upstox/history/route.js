@@ -21,7 +21,13 @@ export async function GET(request) {
 
   const toDate = new Date();
   const fromDate = new Date();
-  fromDate.setDate(toDate.getDate() - 30); // last 30 days
+  if (interval === 'week' || interval === 'month') {
+    fromDate.setDate(toDate.getDate() - 730); // ~2 years for weekly charts
+  } else if (interval === 'day') {
+    fromDate.setDate(toDate.getDate() - 365); // 1 year for daily
+  } else {
+    fromDate.setDate(toDate.getDate() - 30); // 30 days for intraday
+  }
   
   const formatDate = (date) => {
     const year = date.getFullYear();

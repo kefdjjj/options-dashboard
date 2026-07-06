@@ -1610,6 +1610,8 @@ export default function Dashboard() {
               <button className={timeframe === '5minute' ? 'active' : ''} onClick={() => setTimeframe('5minute')}>5m</button>
               <button className={timeframe === '15minute' ? 'active' : ''} onClick={() => setTimeframe('15minute')}>15m</button>
               <button className={timeframe === '30minute' ? 'active' : ''} onClick={() => setTimeframe('30minute')}>30m</button>
+              <button className={timeframe === 'day' ? 'active' : ''} onClick={() => setTimeframe('day')}>1D</button>
+              <button className={timeframe === 'week' ? 'active' : ''} onClick={() => setTimeframe('week')}>1W</button>
             </div>
           </div>
         </section>
@@ -1621,7 +1623,7 @@ export default function Dashboard() {
                 <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   {selectedIndex} {selectedStrike} {optionType} {loading && <Loader2 size={16} className="spinner" />}
                 </h2>
-                <p className="subtitle">Premium ({timeframe.replace('minute', 'm')} {chartType})</p>
+                <p className="subtitle">Premium ({timeframe === 'day' ? '1D' : timeframe === 'week' ? '1W' : timeframe.replace('minute', 'm')} {chartType})</p>
               </div>
               <div className="price-display">
                 <span className="current-price">₹{currentPremium.toFixed(2)}</span>
