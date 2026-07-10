@@ -54,6 +54,7 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const rsiDivMarkersRef = useRef(null);
   const iezMarkersRef = useRef(null);
   const rbtMarkersRef = useRef(null);
+  const nwMarkersRef = useRef(null);
   
   const pvzMarkersRef = useRef(null);
   
@@ -70,6 +71,12 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
 
     chartInstance.current = chart;
     seriesRefs.current = {};
+
+    if (indicators.nw) {
+      seriesRefs.current.nwPath = chart.addSeries(LineSeries, { color: '#10b981', lineWidth: 3, title: 'NW Trend' });
+      seriesRefs.current.nwUpper = chart.addSeries(LineSeries, { color: 'rgba(16, 185, 129, 0.5)', lineWidth: 1, title: 'NW Upper' });
+      seriesRefs.current.nwLower = chart.addSeries(LineSeries, { color: 'rgba(16, 185, 129, 0.5)', lineWidth: 1, title: 'NW Lower' });
+    }
 
     if (indicators.pvz) {
       seriesRefs.current.pvzUo = chart.addSeries(LineSeries, { lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -759,6 +766,27 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       if (iezMarkersRef.current) iezMarkersRef.current.setMarkers([]);
     }
 
+    if (indicators.nw && rawData.length > 50) {
+      const nwRes = calculateNadarayaWatson(rawData);
+      const pathData = [], upperData = [], lowerData = [];
+      for (let i = 0; i < rawData.length; i++) {
+        if (nwRes.path[i] !== null) {
+           const color = (i > 0 && nwRes.path[i] > nwRes.path[i-1]) ? '#10b981' : '#ef4444';
+           pathData.push({ time: rawData[i].time, value: nwRes.path[i], color });
+           upperData.push({ time: rawData[i].time, value: nwRes.upper[i] });
+           lowerData.push({ time: rawData[i].time, value: nwRes.lower[i] });
+        }
+      }
+      if (seriesRefs.current.nwPath) seriesRefs.current.nwPath.setData(pathData);
+      if (seriesRefs.current.nwUpper) seriesRefs.current.nwUpper.setData(upperData);
+      if (seriesRefs.current.nwLower) seriesRefs.current.nwLower.setData(lowerData);
+      
+      if (!nwMarkersRef.current) nwMarkersRef.current = createSeriesMarkers(seriesRefs.current.candle, nwRes.markers);
+      else nwMarkersRef.current.setMarkers(nwRes.markers);
+    } else {
+      if (nwMarkersRef.current) nwMarkersRef.current.setMarkers([]);
+    }
+
     if (indicators.rbt && rawData.length > 1) {
       let markers = [];
       const opens = []; const closes = []; const highs = []; const lows = [];
@@ -832,6 +860,51 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
     </div>
   );
+};
+
+const calculateNadarayaWatson = (data, lookback = 50, h = 16.0, bandMult = 1.5) => {
+  const result = { path: [], upper: [], lower: [], markers: [] };
+  const weights = new Float64Array(lookback + 1);
+  for (let i = 0; i <= lookback; i++) {
+    weights[i] = Math.exp(-(i * i) / (2.0 * h * h));
+  }
+  
+  for (let i = 0; i < data.length; i++) {
+    if (i < lookback) {
+      result.path.push(null); result.upper.push(null); result.lower.push(null);
+      continue;
+    }
+    
+    let sumP = 0, sumW = 0;
+    for (let j = 0; j <= lookback; j++) {
+      const w = weights[j];
+      sumP += data[i - j].close * w;
+      sumW += w;
+    }
+    const nwTrend = sumW !== 0 ? sumP / sumW : null;
+    
+    let sumAbs = 0, sumResW = 0;
+    for (let j = 0; j <= lookback; j++) {
+      const w = weights[j];
+      sumAbs += w * Math.abs(data[i - j].close - nwTrend);
+      sumResW += w;
+    }
+    const residual = sumResW !== 0 ? sumAbs / sumResW : null;
+    
+    result.path.push(nwTrend);
+    result.upper.push(nwTrend !== null && residual !== null ? nwTrend + residual * bandMult : null);
+    result.lower.push(nwTrend !== null && residual !== null ? nwTrend - residual * bandMult : null);
+    
+    if (i >= lookback + 2 && result.path[i] !== null && result.path[i-1] !== null && result.path[i-2] !== null) {
+      const t0 = result.path[i], t1 = result.path[i-1], t2 = result.path[i-2];
+      if (t1 < t2 && t0 > t1) {
+        result.markers.push({ time: data[i].time, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: 'Bull NW' });
+      } else if (t1 > t2 && t0 < t1) {
+        result.markers.push({ time: data[i].time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: 'Bear NW' });
+      }
+    }
+  }
+  return result;
 };
 
 const formatHeikinAshi = (rawCandles) => {
@@ -1221,7 +1294,7 @@ export default function Dashboard() {
   const [tempTokenInput, setTempTokenInput] = useState('');
   
   const [indicators, setIndicators] = useState({
-    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false
+    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false, nw: false
   });
   
   const [theme, setTheme] = useState('dark');
@@ -1924,6 +1997,10 @@ export default function Dashboard() {
                 <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
                   <input type="checkbox" checked={indicators.ema} onChange={() => toggleIndicator('ema')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
                   <span>9 & 21 EMA</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.nw} onChange={() => toggleIndicator('nw')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>Nadaraya-Watson (NW)</span>
                 </label>
                 <label className="flex items-center space-x-3 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 p-2 rounded-lg transition-colors">
                   <input type="checkbox" checked={indicators.iez} onChange={() => toggleIndicator('iez')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
