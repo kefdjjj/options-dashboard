@@ -55,6 +55,8 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const iezMarkersRef = useRef(null);
   const rbtMarkersRef = useRef(null);
   const nwMarkersRef = useRef(null);
+  const ewMarkersRef = useRef(null);
+  const fibLinesRefAuto = useRef([]); // To store the drawn fib price lines
   
   const pvzMarkersRef = useRef(null);
   
@@ -71,6 +73,10 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
 
     chartInstance.current = chart;
     seriesRefs.current = {};
+
+    if (indicators.ew) {
+      seriesRefs.current.ewLine = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, title: 'Elliott Wave' });
+    }
 
     if (indicators.nw) {
       seriesRefs.current.nwPath = chart.addSeries(LineSeries, { color: '#10b981', lineWidth: 3, title: 'NW Trend' });
@@ -766,6 +772,46 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       if (iezMarkersRef.current) iezMarkersRef.current.setMarkers([]);
     }
 
+    if (indicators.ew) {
+      if (fibLinesRefAuto.current.length > 0 && seriesRefs.current.candle) {
+        fibLinesRefAuto.current.forEach(line => seriesRefs.current.candle.removePriceLine(line));
+        fibLinesRefAuto.current = [];
+      }
+      
+      const ewRes = calculateAutoFibElliott(rawData);
+      if (seriesRefs.current.ewLine) seriesRefs.current.ewLine.setData(ewRes.waveLines);
+      
+      if (!ewMarkersRef.current) ewMarkersRef.current = createSeriesMarkers(seriesRefs.current.candle, ewRes.markers);
+      else ewMarkersRef.current.setMarkers(ewRes.markers);
+      
+      if (ewRes.fibLevels && seriesRefs.current.candle) {
+        const createFib = (price, color, title, width = 1) => {
+          if (price !== null && price !== undefined) {
+            const line = seriesRefs.current.candle.createPriceLine({
+              price, color, lineWidth: width, lineStyle: 2, axisLabelVisible: true, title
+            });
+            fibLinesRefAuto.current.push(line);
+          }
+        };
+        const c382 = '#fbbf24'; // Orange/Gold for 382
+        const c618 = '#f59e0b'; // Darker Orange for 618
+        createFib(ewRes.fibLevels.l382, c382, 'Fib 0.382 (Zone)', 2);
+        createFib(ewRes.fibLevels.l500, 'rgba(156, 163, 175, 0.5)', 'Fib 0.500');
+        createFib(ewRes.fibLevels.l618, c618, 'Fib 0.618 (Zone)', 2);
+        createFib(ewRes.fibLevels.l786, 'rgba(239, 68, 68, 0.5)', 'Fib 0.786');
+        createFib(ewRes.fibLevels.e1272, 'rgba(168, 85, 247, 0.5)', 'Ext 1.272');
+        createFib(ewRes.fibLevels.e1618, '#d946ef', 'Ext 1.618', 2);
+        createFib(ewRes.fibLevels.e2618, '#9f1239', 'Ext 2.618');
+      }
+    } else {
+      if (ewMarkersRef.current) ewMarkersRef.current.setMarkers([]);
+      if (fibLinesRefAuto.current.length > 0 && seriesRefs.current.candle) {
+        fibLinesRefAuto.current.forEach(line => seriesRefs.current.candle.removePriceLine(line));
+        fibLinesRefAuto.current = [];
+      }
+      if (seriesRefs.current.ewLine) seriesRefs.current.ewLine.setData([]);
+    }
+
     if (indicators.nw && rawData.length > 50) {
       const nwRes = calculateNadarayaWatson(rawData);
       const pathData = [], upperData = [], lowerData = [];
@@ -860,6 +906,108 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
     </div>
   );
+};
+
+const calculateAutoFibElliott = (data, pivotLen = 5) => {
+  const swings = [];
+  for (let i = pivotLen; i < data.length - pivotLen; i++) {
+    const bar = data[i];
+    let isPH = true, isPL = true;
+    for (let j = 1; j <= pivotLen; j++) {
+      if (data[i - j].high >= bar.high || data[i + j].high >= bar.high) isPH = false;
+      if (data[i - j].low <= bar.low || data[i + j].low <= bar.low) isPL = false;
+    }
+    
+    if (isPH || isPL) {
+      const type = isPH ? 1 : -1;
+      const price = isPH ? bar.high : bar.low;
+      if (swings.length === 0) {
+        swings.push({ price, time: bar.time, type, barIndex: i });
+      } else {
+        const lastSwing = swings[swings.length - 1];
+        if (type === lastSwing.type) {
+           if ((type === 1 && price > lastSwing.price) || (type === -1 && price < lastSwing.price)) {
+              swings[swings.length - 1] = { price, time: bar.time, type, barIndex: i };
+           }
+        } else {
+           swings.push({ price, time: bar.time, type, barIndex: i });
+        }
+      }
+      if (swings.length > 12) swings.shift();
+    }
+  }
+
+  const sCount = swings.length;
+  let p = [], t = [], b = [];
+  for(let i=1; i<=6; i++) {
+    if (sCount >= i) {
+      const s = swings[sCount - i];
+      p.push(s.price); t.push(s.time); b.push(s.type);
+    } else {
+      p.push(null); t.push(null); b.push(null);
+    }
+  }
+  
+  let fibLevels = null;
+  if (sCount >= 2) {
+    const fibHigh = Math.max(p[0], p[1]);
+    const fibLow = Math.min(p[0], p[1]);
+    const fibRange = fibHigh - fibLow;
+    if (fibRange > 0) {
+      if (p[0] > p[1]) {
+        fibLevels = {
+           l382: fibHigh - fibRange * 0.382, l500: fibHigh - fibRange * 0.500, l618: fibHigh - fibRange * 0.618, l786: fibHigh - fibRange * 0.786,
+           e1272: fibHigh + fibRange * 0.272, e1618: fibHigh + fibRange * 0.618, e2618: fibHigh + fibRange * 1.618
+        };
+      } else {
+        fibLevels = {
+           l382: fibLow + fibRange * 0.382, l500: fibLow + fibRange * 0.500, l618: fibLow + fibRange * 0.618, l786: fibLow + fibRange * 0.786,
+           e1272: fibLow - fibRange * 0.272, e1618: fibLow - fibRange * 0.618, e2618: fibLow - fibRange * 1.618
+        };
+      }
+    }
+  }
+
+  const minRatio = 0.236;
+  let waveLines = [];
+  let markers = [];
+  
+  if (sCount >= 6) {
+    const bullishPattern = b[5]===-1 && b[4]===1 && b[3]===-1 && b[2]===1 && b[1]===-1 && b[0]===1 && p[4]>p[5] && p[3]>p[5] && p[2]>p[4] && p[1]>p[3] && p[0]>p[2];
+    const bearishPattern = b[5]===1 && b[4]===-1 && b[3]===1 && b[2]===-1 && b[1]===1 && b[0]===-1 && p[4]<p[5] && p[3]<p[5] && p[2]<p[4] && p[1]<p[3] && p[0]<p[2];
+                           
+    const w1 = Math.abs(p[4]-p[5]), w2 = Math.abs(p[3]-p[4]), w3 = Math.abs(p[2]-p[3]), w4 = Math.abs(p[1]-p[2]), w5 = Math.abs(p[0]-p[1]);
+    const waveValid = w1 > 0 && (w2/w1)>=minRatio && (w3/w1)>=minRatio && (w4/w3)>=minRatio && (w5/w3)>=minRatio;
+    
+    if ((bullishPattern || bearishPattern) && waveValid) {
+       waveLines = [
+         { time: t[5], value: p[5] }, { time: t[4], value: p[4] }, { time: t[3], value: p[3] },
+         { time: t[2], value: p[2] }, { time: t[1], value: p[1] }, { time: t[0], value: p[0] }
+       ];
+       const cColor = bullishPattern ? '#3b82f6' : '#ef4444';
+       markers.push({ time: t[4], position: bullishPattern ? 'aboveBar' : 'belowBar', color: cColor, shape: 'text', text: '1' });
+       markers.push({ time: t[3], position: bullishPattern ? 'belowBar' : 'aboveBar', color: '#f97316', shape: 'text', text: '2' });
+       markers.push({ time: t[2], position: bullishPattern ? 'aboveBar' : 'belowBar', color: '#22c55e', shape: 'text', text: '3' });
+       markers.push({ time: t[1], position: bullishPattern ? 'belowBar' : 'aboveBar', color: '#f97316', shape: 'text', text: '4' });
+       markers.push({ time: t[0], position: bullishPattern ? 'aboveBar' : 'belowBar', color: '#22c55e', shape: 'text', text: '5' });
+    }
+  }
+  
+  if (sCount >= 4 && waveLines.length === 0) {
+    const abcBearish = b[3]===1 && b[2]===-1 && b[1]===1 && b[0]===-1 && p[2]<p[3] && p[1]<p[3] && p[0]<p[2];
+    const abcBullish = b[3]===-1 && b[2]===1 && b[1]===-1 && b[0]===1 && p[2]>p[3] && p[1]>p[3] && p[0]>p[2];
+    
+    if (abcBearish || abcBullish) {
+       waveLines = [
+         { time: t[3], value: p[3] }, { time: t[2], value: p[2] }, { time: t[1], value: p[1] }, { time: t[0], value: p[0] }
+       ];
+       markers.push({ time: t[2], position: abcBullish ? 'belowBar' : 'aboveBar', color: abcBullish ? '#22c55e' : '#ef4444', shape: 'text', text: 'A' });
+       markers.push({ time: t[1], position: abcBullish ? 'aboveBar' : 'belowBar', color: '#f97316', shape: 'text', text: 'B' });
+       markers.push({ time: t[0], position: abcBullish ? 'belowBar' : 'aboveBar', color: abcBullish ? '#22c55e' : '#ef4444', shape: 'text', text: 'C' });
+    }
+  }
+  
+  return { fibLevels, waveLines, markers };
 };
 
 const calculateNadarayaWatson = (data, lookback = 50, h = 16.0, bandMult = 1.5) => {
@@ -1294,7 +1442,7 @@ export default function Dashboard() {
   const [tempTokenInput, setTempTokenInput] = useState('');
   
   const [indicators, setIndicators] = useState({
-    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false, nw: false
+    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false, nw: false, ew: false
   });
   
   const [theme, setTheme] = useState('dark');
@@ -2001,6 +2149,10 @@ export default function Dashboard() {
                 <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
                   <input type="checkbox" checked={indicators.nw} onChange={() => toggleIndicator('nw')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
                   <span>Nadaraya-Watson (NW)</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.ew} onChange={() => toggleIndicator('ew')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>Auto Fib & Elliott Wave</span>
                 </label>
                 <label className="flex items-center space-x-3 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 p-2 rounded-lg transition-colors">
                   <input type="checkbox" checked={indicators.iez} onChange={() => toggleIndicator('iez')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
