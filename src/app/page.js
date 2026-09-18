@@ -211,7 +211,6 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
 
 
 
-    }
 
     if (indicators.qqe) {
       const qqeRes = calculateQQEMod(rawData);
