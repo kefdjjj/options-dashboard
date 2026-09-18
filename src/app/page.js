@@ -74,6 +74,16 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
     chartInstance.current = chart;
     seriesRefs.current = {};
 
+    chart.priceScale('qqe').applyOptions({
+      scaleMargins: { top: 0.8, bottom: 0 },
+      visible: indicators.qqe,
+    });
+
+    if (indicators.qqe) {
+      seriesRefs.current.qqeHist = chart.addSeries(HistogramSeries, { priceScaleId: 'qqe', priceFormat: { type: 'volume' } });
+      seriesRefs.current.qqeLine = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 1, priceScaleId: 'qqe', title: 'QQE Trend' });
+    }
+
     if (indicators.ew) {
       seriesRefs.current.ewLine = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, title: 'Elliott Wave' });
     }
@@ -772,6 +782,15 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       if (iezMarkersRef.current) iezMarkersRef.current.setMarkers([]);
     }
 
+    if (indicators.qqe) {
+      const qqeRes = calculateQQEMod(rawData);
+      if (seriesRefs.current.qqeHist) seriesRefs.current.qqeHist.setData(qqeRes.histData);
+      if (seriesRefs.current.qqeLine) seriesRefs.current.qqeLine.setData(qqeRes.lineData);
+    } else {
+      if (seriesRefs.current.qqeHist) seriesRefs.current.qqeHist.setData([]);
+      if (seriesRefs.current.qqeLine) seriesRefs.current.qqeLine.setData([]);
+    }
+
     if (indicators.ew) {
       if (fibLinesRefAuto.current.length > 0 && seriesRefs.current.candle) {
         fibLinesRefAuto.current.forEach(line => seriesRefs.current.candle.removePriceLine(line));
@@ -906,6 +925,104 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
     </div>
   );
+};
+
+const calculateQQEMod = (data) => {
+  const close = data.map(d => d.close);
+  const time = data.map(d => d.time);
+  
+  if (close.length < 50) return { histData: [], lineData: [] };
+  
+  const calcQQE = (rsiLen, smooth, factor) => {
+    const wildersLen = rsiLen * 2 - 1;
+    const rsiRaw = RSI.calculate({ period: rsiLen, values: close });
+    const rsi = new Array(close.length - rsiRaw.length).fill(null).concat(rsiRaw);
+    
+    const rsiValid = rsi.filter(v => v !== null);
+    const smoothedRsiRaw = EMA.calculate({ period: smooth, values: rsiValid });
+    const smoothedRsi = new Array(close.length - smoothedRsiRaw.length).fill(null).concat(smoothedRsiRaw);
+    
+    const atrRsiRaw = [];
+    for (let i = 1; i < smoothedRsi.length; i++) {
+      if (smoothedRsi[i-1] !== null && smoothedRsi[i] !== null) {
+        atrRsiRaw.push(Math.abs(smoothedRsi[i-1] - smoothedRsi[i]));
+      } else {
+        atrRsiRaw.push(null);
+      }
+    }
+    const atrRsiValid = atrRsiRaw.filter(v => v !== null);
+    const smoothedAtrRsiRaw = EMA.calculate({ period: wildersLen, values: atrRsiValid });
+    const smoothedAtrRsi = new Array(close.length - smoothedAtrRsiRaw.length).fill(null).concat(smoothedAtrRsiRaw);
+    
+    const longBand = new Array(close.length).fill(null);
+    const shortBand = new Array(close.length).fill(null);
+    const trendDirection = new Array(close.length).fill(1);
+    const qqeLine = new Array(close.length).fill(null);
+    
+    for (let i = 1; i < close.length; i++) {
+      if (smoothedRsi[i] === null || smoothedAtrRsi[i] === null) continue;
+      
+      const dynamicAtr = smoothedAtrRsi[i] * factor;
+      const newLongBand = smoothedRsi[i] - dynamicAtr;
+      const newShortBand = smoothedRsi[i] + dynamicAtr;
+      
+      const prevLongBand = longBand[i-1] === null ? 0 : longBand[i-1];
+      const prevShortBand = shortBand[i-1] === null ? 0 : shortBand[i-1];
+      const prevRsi = smoothedRsi[i-1];
+      
+      longBand[i] = (prevRsi > prevLongBand && smoothedRsi[i] > prevLongBand) ? Math.max(prevLongBand, newLongBand) : newLongBand;
+      shortBand[i] = (prevRsi < prevShortBand && smoothedRsi[i] < prevShortBand) ? Math.min(prevShortBand, newShortBand) : newShortBand;
+      
+      const x_short = (prevRsi < prevShortBand && smoothedRsi[i] > prevShortBand) || (prevRsi > prevShortBand && smoothedRsi[i] < prevShortBand);
+      const x_long = (prevLongBand < prevRsi && prevLongBand > smoothedRsi[i]) || (prevLongBand > prevRsi && prevLongBand < smoothedRsi[i]);
+      
+      let td = trendDirection[i-1];
+      if (x_short) td = 1;
+      else if (x_long) td = -1;
+      
+      trendDirection[i] = td;
+      qqeLine[i] = td === 1 ? longBand[i] : shortBand[i];
+    }
+    
+    return { qqeLine, smoothedRsi };
+  };
+  
+  const p = calcQQE(6, 5, 3.0);
+  const s = calcQQE(6, 5, 1.61);
+  
+  const bbBase = p.qqeLine.map(v => v !== null ? v - 50 : null);
+  const bbBaseValid = bbBase.filter(v => v !== null);
+  
+  const smaBaseRaw = SMA.calculate({ period: 50, values: bbBaseValid });
+  const smaBase = new Array(close.length - smaBaseRaw.length).fill(null).concat(smaBaseRaw);
+  
+  const sdBaseRaw = SD.calculate({ period: 50, values: bbBaseValid });
+  const sdBase = new Array(close.length - sdBaseRaw.length).fill(null).concat(sdBaseRaw);
+  
+  const histData = [];
+  const lineData = [];
+  
+  for (let i = 0; i < close.length; i++) {
+    if (s.qqeLine[i] === null || smaBase[i] === null || sdBase[i] === null) continue;
+    
+    const bUpper = smaBase[i] + 0.35 * sdBase[i];
+    const bLower = smaBase[i] - 0.35 * sdBase[i];
+    
+    const pRsi50 = p.smoothedRsi[i] - 50;
+    const sRsi50 = s.smoothedRsi[i] - 50;
+    
+    let color = 'rgba(112, 112, 112, 0.4)';
+    if (sRsi50 > 3.0 && pRsi50 > bUpper) {
+      color = '#00c3ff';
+    } else if (sRsi50 < -3.0 && pRsi50 < bLower) {
+      color = '#ff0062';
+    }
+    
+    histData.push({ time: time[i], value: sRsi50, color });
+    lineData.push({ time: time[i], value: s.qqeLine[i] - 50 });
+  }
+  
+  return { histData, lineData };
 };
 
 const calculateAutoFibElliott = (data, pivotLen = 5) => {
@@ -1442,7 +1559,7 @@ export default function Dashboard() {
   const [tempTokenInput, setTempTokenInput] = useState('');
   
   const [indicators, setIndicators] = useState({
-    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false, nw: false, ew: false
+    rsi: true, macd: true, vwap: false, mavwap: false, adx: false, ewo: false, pvz: false, utbot: false, utbot3: false, fib: false, elliott: false, smc: false, rsiDiv: false, iez: false, rbt: false, ema: false, nw: false, ew: false, qqe: false
   });
   
   const [theme, setTheme] = useState('dark');
@@ -2153,6 +2270,10 @@ export default function Dashboard() {
                 <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
                   <input type="checkbox" checked={indicators.ew} onChange={() => toggleIndicator('ew')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
                   <span>Auto Fib & Elliott Wave</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.qqe} onChange={() => toggleIndicator('qqe')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>QQE MOD</span>
                 </label>
                 <label className="flex items-center space-x-3 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 p-2 rounded-lg transition-colors">
                   <input type="checkbox" checked={indicators.iez} onChange={() => toggleIndicator('iez')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
