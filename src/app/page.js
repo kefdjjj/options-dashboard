@@ -211,11 +211,7 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
 
 
 
-    } else if (overlayRef.current) {
-      overlayRef.current.innerHTML = '';
-      blockElementsRef.current = [];
     }
-
 
     if (indicators.qqe) {
       const qqeRes = calculateQQEMod(rawData);
