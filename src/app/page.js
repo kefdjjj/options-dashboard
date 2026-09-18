@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, Component } from 'react';
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
-import { RSI, MACD, ADX, VWAP, SMA, ATR, EMA, SD } from 'technicalindicators';
+import { RSI, SMA, EMA, SD } from 'technicalindicators';
 import { TrendingUp, TrendingDown, Activity, DollarSign, Clock, BarChart3, ChevronDown, AlertCircle, Loader2, Settings, X, SlidersHorizontal, ListChecks, Sun, Moon, Maximize2, Minimize2, Search } from 'lucide-react';
 import './dashboard.css';
 
@@ -30,11 +30,6 @@ class ErrorBoundary extends Component {
   }
 }
 
-const calculateSubpaneMargins = (currentBottom, paneHeight = 0.15) => {
-  const top = 1 - (currentBottom + paneHeight);
-  return { top, bottom: currentBottom };
-};
-
 const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const chartContainerRef = useRef();
   const chartInstance = useRef(null);
@@ -45,13 +40,9 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const overlayRef = useRef(null);
   const blockElementsRef = useRef([]);
   const fibLinesRef = useRef([]);
-  const utbotMarkersRef = useRef(null);
-  const elliottMarkersRef = useRef(null);
   const utbotLineRef = useRef(null);
-  const utbot3MarkersRef = useRef(null);
   const utbot3LineRef = useRef(null);
   const elliottLineRef = useRef(null);
-  const rsiDivMarkersRef = useRef(null);
   
   
   useEffect(() => {
@@ -212,10 +203,15 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
 
 
 
+
     if (indicators.qqe) {
       const qqeRes = calculateQQEMod(rawData);
       if (seriesRefs.current.qqeHist) seriesRefs.current.qqeHist.setData(qqeRes.histData);
       if (seriesRefs.current.qqeLine) seriesRefs.current.qqeLine.setData(qqeRes.lineData);
+    } else {
+      if (seriesRefs.current.qqeHist) seriesRefs.current.qqeHist.setData([]);
+      if (seriesRefs.current.qqeLine) seriesRefs.current.qqeLine.setData([]);
+    }
 
 
 
@@ -293,6 +289,9 @@ const calculateQQEMod = (data) => {
     for (let i = 1; i < smoothedRsi.length; i++) {
       if (smoothedRsi[i-1] !== null && smoothedRsi[i] !== null) {
         atrRsiRaw.push(Math.abs(smoothedRsi[i-1] - smoothedRsi[i]));
+      } else {
+        atrRsiRaw.push(null);
+      }
     }
     const atrRsiValid = atrRsiRaw.filter(v => v !== null);
     const smoothedAtrRsiRaw = EMA.calculate({ period: wildersLen, values: atrRsiValid });
@@ -368,5 +367,3 @@ const calculateQQEMod = (data) => {
   
   return { histData, lineData };
 };
-
-    qqe: true
