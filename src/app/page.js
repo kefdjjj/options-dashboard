@@ -47,9 +47,6 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const overlayRef = useRef(null);
   const blockElementsRef = useRef([]);
   const fibLinesRef = useRef([]);
-  const utbotLineRef = useRef(null);
-  const utbot3LineRef = useRef(null);
-  const elliottLineRef = useRef(null);
   
   
   useEffect(() => {
@@ -164,18 +161,7 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       chart.remove();
       if (overlayRef.current) overlayRef.current.remove();
       overlayRef.current = null;
-      utbotMarkersRef.current = null;
-      elliottMarkersRef.current = null;
-      utbotLineRef.current = null;
-      utbot3MarkersRef.current = null;
-      utbot3LineRef.current = null;
-      elliottLineRef.current = null;
-      rsiDivMarkersRef.current = null;
-      iezMarkersRef.current = null;
-      rbtMarkersRef.current = null;
       
-      if (pvzMarkersRef.current) pvzMarkersRef.current.setMarkers([]);
-      pvzMarkersRef.current = null;
     };
   }, [indicators, theme, chartType]);
 
