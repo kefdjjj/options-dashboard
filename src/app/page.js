@@ -373,6 +373,42 @@ const calculateQQEMod = (data) => {
   return { histData, lineData };
 };
 
+const formatHeikinAshi = (rawCandles) => {
+  let prevHaOpen = null;
+  let prevHaClose = null;
+
+  return rawCandles.map((candle, index) => {
+    const timeStr = candle[0];
+    const time = Math.floor(new Date(timeStr).getTime() / 1000);
+    
+    const open = parseFloat(candle[1]);
+    const high = parseFloat(candle[2]);
+    const low = parseFloat(candle[3]);
+    const close = parseFloat(candle[4]);
+
+    const haClose = (open + high + low + close) / 4;
+    const haOpen = index === 0 ? (open + close) / 2 : (prevHaOpen + prevHaClose) / 2;
+    const haHigh = Math.max(high, haOpen, haClose);
+    const haLow = Math.min(low, haOpen, haClose);
+
+    prevHaOpen = haOpen;
+    prevHaClose = haClose;
+
+    return { time, open: parseFloat(haOpen.toFixed(2)), high: parseFloat(haHigh.toFixed(2)), low: parseFloat(haLow.toFixed(2)), close: parseFloat(haClose.toFixed(2)) };
+  });
+};
+
+const extractRaw = (rawCandles) => {
+  return rawCandles.map(candle => ({
+    time: Math.floor(new Date(candle[0]).getTime() / 1000),
+    open: parseFloat(candle[1]),
+    high: parseFloat(candle[2]),
+    low: parseFloat(candle[3]),
+    close: parseFloat(candle[4]),
+    volume: candle[5] ? parseFloat(candle[5]) : 0
+  }));
+};
+
 const aggregateCandles = (candles1m, timeframe) => {
   if (timeframe === '1minute') return candles1m;
   
