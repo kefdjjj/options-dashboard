@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, Component } from 'react';
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
-import { RSI, SMA, EMA, SD, MACD } from 'technicalindicators';
+import { RSI, SMA, EMA, SD, MACD, VWAP, ADX, ATR } from 'technicalindicators';
 import { TrendingUp, TrendingDown, Activity, DollarSign, Clock, BarChart3, ChevronDown, AlertCircle, Loader2, Settings, X, SlidersHorizontal, ListChecks, Sun, Moon, Maximize2, Minimize2, Search } from 'lucide-react';
 import './dashboard.css';
 
