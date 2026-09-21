@@ -30,6 +30,11 @@ class ErrorBoundary extends Component {
   }
 }
 
+const calculateSubpaneMargins = (currentBottom, paneHeight = 0.15) => {
+  const top = 1 - (currentBottom + paneHeight);
+  return { top, bottom: currentBottom };
+};
+
 const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const chartContainerRef = useRef();
   const chartInstance = useRef(null);
@@ -367,3 +372,1032 @@ const calculateQQEMod = (data) => {
   
   return { histData, lineData };
 };
+
+const aggregateCandles = (candles1m, timeframe) => {
+  if (timeframe === '1minute') return candles1m;
+  
+  const minutes = parseInt(timeframe.replace('minute', ''), 10);
+  if (isNaN(minutes)) return candles1m;
+
+  const aggregated = [];
+  let currentGroup = [];
+  let currentGroupTime = null;
+
+  candles1m.forEach(candle => {
+    const date = new Date(candle[0]);
+    const h = date.getHours();
+    const m = date.getMinutes();
+    const minutesFromOpen = (h - 9) * 60 + m - 15;
+    const groupIndex = Math.floor(minutesFromOpen / minutes);
+    
+    if (currentGroupTime === null || currentGroupTime !== groupIndex) {
+      if (currentGroup.length > 0) {
+        const groupOpen = currentGroup[0][1];
+        const groupHigh = Math.max(...currentGroup.map(c => c[2]));
+        const groupLow = Math.min(...currentGroup.map(c => c[3]));
+        const groupClose = currentGroup[currentGroup.length - 1][4];
+        const groupVol = currentGroup.reduce((sum, c) => sum + (c[5] ? parseFloat(c[5]) : 0), 0);
+        const groupOi = currentGroup[currentGroup.length - 1][6] || 0;
+        aggregated.push([currentGroup[0][0], groupOpen, groupHigh, groupLow, groupClose, groupVol, groupOi]);
+      }
+      currentGroup = [candle];
+      currentGroupTime = groupIndex;
+    } else {
+      currentGroup.push(candle);
+    }
+  });
+
+  if (currentGroup.length > 0) {
+    const groupOpen = currentGroup[0][1];
+    const groupHigh = Math.max(...currentGroup.map(c => c[2]));
+    const groupLow = Math.min(...currentGroup.map(c => c[3]));
+    const groupClose = currentGroup[currentGroup.length - 1][4];
+    const groupVol = currentGroup.reduce((sum, c) => sum + (c[5] ? parseFloat(c[5]) : 0), 0);
+    const groupOi = currentGroup[currentGroup.length - 1][6] || 0;
+    aggregated.push([currentGroup[0][0], groupOpen, groupHigh, groupLow, groupClose, groupVol, groupOi]);
+  }
+
+  return aggregated;
+};
+
+const findPivots = (data, window = 5, isHigh = true) => {
+  const pivots = [];
+  for (let i = window; i < data.length - window; i++) {
+    let isPivot = true;
+    for (let j = i - window; j <= i + window; j++) {
+      if (i === j) continue;
+      if (isHigh && data[j] >= data[i]) { isPivot = false; break; }
+      if (!isHigh && data[j] <= data[i]) { isPivot = false; break; }
+    }
+    if (isPivot) pivots.push({ index: i, value: data[i] });
+  }
+  return pivots;
+};
+
+const calculateSignals = (rawCandles) => {
+  if (!rawCandles || rawCandles.length === 0) return { signals: null, values: null };
+  const opens = []; const closes = []; const highs = []; const lows = []; const volumes = [];
+  let totalVol = 0;
+  rawCandles.forEach(c => { opens.push(parseFloat(c[1])); highs.push(parseFloat(c[2])); lows.push(parseFloat(c[3])); closes.push(parseFloat(c[4])); let v = c[5] ? parseFloat(c[5]) : 0; totalVol += v; volumes.push(v); });
+  if (totalVol === 0) volumes.fill(1);
+  const currentClose = closes[closes.length - 1];
+  
+  let newSignals = { rsi: 'NEUTRAL', macd: 'NEUTRAL', vwap: 'NEUTRAL', mavwap: 'NEUTRAL', adx: 'WEAK', ewo: 'NEUTRAL', utbot: 'NEUTRAL', rsiDiv: 'NEUTRAL', iez: 'NEUTRAL', rbt: 'NEUTRAL' };
+  let newVals = { rsi: null, macd: null, vwap: null, mavwap: null, adx: null };
+  
+  const rsiRes = RSI.calculate({ values: closes, period: 14 });
+  if (rsiRes.length > 0) { const curRsi = rsiRes[rsiRes.length - 1]; newVals.rsi = curRsi; if (curRsi > 60) newSignals.rsi = 'BULLISH'; else if (curRsi < 40) newSignals.rsi = 'BEARISH'; }
+
+  const macdRes = MACD.calculate({ fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false, values: closes });
+  if (macdRes.length > 0) { const curMacd = macdRes[macdRes.length - 1]; if (curMacd) { newVals.macd = curMacd.histogram; if (curMacd.histogram > 0) newSignals.macd = 'BULLISH'; else if (curMacd.histogram < 0) newSignals.macd = 'BEARISH'; } }
+
+  const vwapRes = VWAP.calculate({ high: highs, low: lows, close: closes, volume: volumes });
+  if (vwapRes.length > 0) { const curVwap = vwapRes[vwapRes.length - 1]; newVals.vwap = curVwap; if (currentClose > curVwap) newSignals.vwap = 'BULLISH'; else newSignals.vwap = 'BEARISH'; }
+
+  const mavwapRes = SMA.calculate({ period: 30, values: vwapRes.filter(v => !isNaN(v) && v !== null) });
+  if (mavwapRes.length > 0) { const curMavwap = mavwapRes[mavwapRes.length - 1]; newVals.mavwap = curMavwap; const curVwap = vwapRes[vwapRes.length - 1]; if (curVwap > curMavwap) newSignals.mavwap = 'BULLISH'; else newSignals.mavwap = 'BEARISH'; }
+
+  const adxRes = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+  if (adxRes.length > 0) { const curAdx = adxRes[adxRes.length - 1]; if (curAdx) { newVals.adx = curAdx.adx; if (curAdx.adx > 25) newSignals.adx = 'STRONG'; } }
+
+  const ewo5 = SMA.calculate({ period: 5, values: closes });
+  const ewo35 = SMA.calculate({ period: 35, values: closes });
+  if (ewo5.length > 0 && ewo35.length > 0) {
+     const curEwo = ewo5[ewo5.length - 1] - ewo35[ewo35.length - 1];
+     const prevEwo = ewo5.length > 1 ? ewo5[ewo5.length - 2] - ewo35[ewo35.length - 2] : 0;
+     if (curEwo > 0 && curEwo >= prevEwo) newSignals.ewo = 'STRONG UPWARD';
+     else if (curEwo > 0 && curEwo < prevEwo) newSignals.ewo = 'WEAK UPWARD';
+      else if (curEwo < 0 && curEwo < prevEwo) newSignals.ewo = 'STRONG DOWNWARD';
+      else if (curEwo < 0 && curEwo >= prevEwo) newSignals.ewo = 'WEAK DOWNWARD';
+   }
+   
+   if (closes.length >= 2) {
+      const prevC = closes[closes.length - 2]; const prevO = opens[closes.length - 2];
+      const prevH = highs[closes.length - 2]; const prevL = lows[closes.length - 2];
+      const curC = closes[closes.length - 1];
+      if (prevC < prevO && curC > prevH) newSignals.rbt = 'BUY';
+      else if (prevC > prevO && curC < prevL) newSignals.rbt = 'SELL';
+   }
+
+   const atrRes = ATR.calculate({ high: highs, low: lows, close: closes, period: 10 });
+  let prevStop = 0; let prevPos = 0;
+  const atrOffset = closes.length - atrRes.length;
+  for (let i = atrOffset; i < closes.length; i++) {
+     let atrVal = atrRes[i - atrOffset];
+     if (isNaN(atrVal) || atrVal === null) continue;
+     let src = closes[i]; let prevSrc = i > atrOffset ? closes[i-1] : src;
+     let currentStop = prevStop;
+     if (src > prevStop && prevSrc > prevStop) currentStop = Math.max(prevStop, src - atrVal);
+     else if (src < prevStop && prevSrc < prevStop) currentStop = Math.min(prevStop, src + atrVal);
+     else if (src > prevStop) currentStop = src - atrVal;
+     else currentStop = src + atrVal;
+     let currentPos = prevPos;
+     if (prevSrc < prevStop && src > currentStop) currentPos = 1;
+     else if (prevSrc > prevStop && src < currentStop) currentPos = -1;
+     prevStop = currentStop; prevPos = currentPos;
+  }
+  newSignals.utbot = prevPos === 1 ? 'BUY' : prevPos === -1 ? 'SELL' : 'NEUTRAL';
+  
+  if (rsiRes.length > 20) {
+    const recentHighs = highs.slice(-100);
+    const recentLows = lows.slice(-100);
+    const recentRsi = rsiRes.slice(-100);
+    const rHighs = findPivots(recentRsi, 5, true);
+    const rLows = findPivots(recentRsi, 5, false);
+    
+    for (let i = 1; i < rLows.length; i++) {
+      const currPivot = rLows[i];
+      if (currPivot.index <= 50) continue;
+      const currRsi = currPivot.value;
+      const currPriceLow = recentLows[currPivot.index];
+      for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+        const prevPivot = rLows[j];
+        if (currPivot.index - prevPivot.index > 60) break;
+        const prevRsi = prevPivot.value;
+        const prevPriceLow = recentLows[prevPivot.index];
+        if (currPriceLow < prevPriceLow && currRsi > prevRsi) {
+          newSignals.rsiDiv = 'BULLISH';
+          break;
+        } else if (currPriceLow > prevPriceLow && currRsi < prevRsi) {
+          newSignals.rsiDiv = 'BULLISH (HIDDEN)';
+          break;
+        }
+      }
+    }
+    
+    for (let i = 1; i < rHighs.length; i++) {
+      const currPivot = rHighs[i];
+      if (currPivot.index <= 50) continue;
+      const currRsi = currPivot.value;
+      const currPriceHigh = recentHighs[currPivot.index];
+      for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+        const prevPivot = rHighs[j];
+        if (currPivot.index - prevPivot.index > 60) break;
+        const prevRsi = prevPivot.value;
+        const prevPriceHigh = recentHighs[prevPivot.index];
+        if (currPriceHigh > prevPriceHigh && currRsi < prevRsi) {
+          newSignals.rsiDiv = 'BEARISH';
+          break;
+        } else if (currPriceHigh < prevPriceHigh && currRsi > prevRsi) {
+          newSignals.rsiDiv = 'BEARISH (HIDDEN)';
+          break;
+        }
+      }
+    }
+  }
+
+  const iezAtr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
+  const iezAtrOffset = closes.length - iezAtr.length;
+  let bullishZones = [];
+  let bearishZones = [];
+  for (let i = 20; i < closes.length; i++) {
+    if (i < iezAtrOffset) continue;
+    const currentAtr = iezAtr[i - iezAtrOffset];
+    const body = Math.abs(closes[i] - opens[i]);
+    if (closes[i] > opens[i] && body > 1.5 * currentAtr) {
+      for (let j = i - 1; j > Math.max(0, i - 10); j--) {
+        if (closes[j] < opens[j]) {
+          bullishZones.push({ top: highs[j], bottom: lows[j], active: true, signalGiven: false, startIndex: j });
+          break;
+        }
+      }
+    }
+    if (closes[i] < opens[i] && body > 1.5 * currentAtr) {
+      for (let j = i - 1; j > Math.max(0, i - 10); j--) {
+        if (closes[j] > opens[j]) {
+          bearishZones.push({ top: highs[j], bottom: lows[j], active: true, signalGiven: false, startIndex: j });
+          break;
+        }
+      }
+    }
+    bullishZones.forEach(z => {
+      if (!z.active) return;
+      if (closes[i] < z.bottom) z.active = false;
+      else if (lows[i] <= z.top && !z.signalGiven && i > z.startIndex + 2) {
+        z.signalGiven = true;
+        if (i >= closes.length - 2) newSignals.iez = 'BUY';
+      }
+    });
+    bearishZones.forEach(z => {
+      if (!z.active) return;
+      if (closes[i] > z.top) z.active = false;
+      else if (highs[i] >= z.bottom && !z.signalGiven && i > z.startIndex + 2) {
+        z.signalGiven = true;
+        if (i >= closes.length - 2) newSignals.iez = 'SELL';
+      }
+    });
+  }
+
+  return { signals: newSignals, values: newVals };
+};
+
+const SignalBoard = ({ title, signals, values }) => {
+  if (!signals || !values) return null;
+  return (
+    <div className="signal-board" style={{ marginTop: '1rem' }}>
+      <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '1rem', fontWeight: 600, color: 'var(--foreground)' }}>
+        <Activity size={18} className="logo-icon" />
+        {title} Technicals
+      </h3>
+      <div className="summary-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem' }}>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>RSI (14) {values.rsi !== null ? `(${values.rsi.toFixed(2)})` : ''}</span>
+          <span className={`badge ${signals.rsi.toLowerCase()}`}>{signals.rsi}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MACD {values.macd !== null ? `(${values.macd.toFixed(2)})` : ''}</span>
+          <span className={`badge ${signals.macd.toLowerCase()}`}>{signals.macd}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>VWAP {values.vwap !== null ? `(${values.vwap.toFixed(2)})` : ''}</span>
+          <span className={`badge ${signals.vwap.toLowerCase()}`}>{signals.vwap}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MAVWAP {values.mavwap !== null ? `(${values.mavwap.toFixed(2)})` : ''}</span>
+          <span className={`badge ${signals.mavwap.toLowerCase()}`}>{signals.mavwap}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>ADX {values.adx !== null ? `(${values.adx.toFixed(2)})` : ''}</span>
+          <span className={`badge ${signals.adx.toLowerCase()}`}>{signals.adx}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Elliott Wave</span>
+          <span className={`badge ${signals.ewo.includes('UPWARD') ? 'bullish' : signals.ewo.includes('DOWNWARD') ? 'bearish' : 'neutral'}`}>{signals.ewo}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>UT Bot</span>
+          <span className={`badge ${signals.utbot === 'BUY' ? 'bullish' : signals.utbot === 'SELL' ? 'bearish' : 'neutral'}`}>{signals.utbot}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>RSI Div</span>
+          <span className={`badge ${signals.rsiDiv?.includes('BULLISH') ? 'bullish' : signals.rsiDiv?.includes('BEARISH') ? 'bearish' : 'neutral'}`}>{signals.rsiDiv}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <div className="flex flex-col">
+            <span className="text-xs text-slate-500 dark:text-slate-400 mb-1">IEZ</span>
+            <span className={`badge ${signals.iez?.includes('BUY') ? 'bullish' : signals.iez?.includes('SELL') ? 'bearish' : 'neutral'}`}>{signals.iez}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-xs text-slate-500 dark:text-slate-400 mb-1">Red Bar Theory</span>
+            <span className={`badge ${signals.rbt?.includes('BUY') ? 'bullish' : signals.rbt?.includes('SELL') ? 'bearish' : 'neutral'}`}>{signals.rbt || 'NEUTRAL'}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default function Dashboard() {
+  const [selectedIndex, setSelectedIndex] = useState('NIFTY');
+  const [underlyingKey, setUnderlyingKey] = useState('NSE_INDEX|Nifty 50');
+  const [fullScreenChart, setFullScreenChart] = useState(null);
+  
+  const [contracts, setContracts] = useState([]);
+  const [availableExpiries, setAvailableExpiries] = useState([]);
+  const [availableStrikes, setAvailableStrikes] = useState([]);
+  
+  const [selectedExpiry, setSelectedExpiry] = useState('');
+  const [selectedStrike, setSelectedStrike] = useState('');
+  const [optionType, setOptionType] = useState('CE');
+  const [timeframe, setTimeframe] = useState('1minute');
+  const [chartType, setChartType] = useState('Heikin Ashi');
+  
+  const [chartData, setChartData] = useState([]);
+  const [rawChartData, setRawChartData] = useState([]);
+  const [currentPremium, setCurrentPremium] = useState(0);
+  const [startPremium, setStartPremium] = useState(0);
+
+  const [niftyData, setNiftyData] = useState([]);
+  const [niftyRawData, setNiftyRawData] = useState([]);
+  const [niftyPremium, setNiftyPremium] = useState(0);
+    const [niftyChange, setNiftyChange] = useState(0);
+
+  const [giftNiftyData, setGiftNiftyData] = useState([]);
+  const [giftNiftyRawData, setGiftNiftyRawData] = useState([]);
+  const [giftNiftyPremium, setGiftNiftyPremium] = useState(0);
+  const [giftNiftyChange, setGiftNiftyChange] = useState(0);
+
+  const [bankNiftyData, setBankNiftyData] = useState([]);
+  const [bankNiftyRawData, setBankNiftyRawData] = useState([]);
+  const [bankNiftyPremium, setBankNiftyPremium] = useState(0);
+  const [bankNiftyChange, setBankNiftyChange] = useState(0);
+
+  const [sensexData, setSensexData] = useState([]);
+  const [sensexRawData, setSensexRawData] = useState([]);
+  const [sensexPremium, setSensexPremium] = useState(0);
+  const [sensexChange, setSensexChange] = useState(0);
+
+  const [bankexData, setBankexData] = useState([]);
+  const [bankexRawData, setBankexRawData] = useState([]);
+  const [bankexPremium, setBankexPremium] = useState(0);
+  const [bankexChange, setBankexChange] = useState(0);
+  const [bankexSignals, setBankexSignals] = useState(null);
+  const [bankexIndicatorValues, setBankexIndicatorValues] = useState(null);
+
+  const [silverData, setSilverData] = useState([]);
+  const [silverRawData, setSilverRawData] = useState([]);
+  const [silverPremium, setSilverPremium] = useState(0);
+  const [silverChange, setSilverChange] = useState(0);
+  const [silverSignals, setSilverSignals] = useState(null);
+  const [silverIndicatorValues, setSilverIndicatorValues] = useState(null);
+  const [silverKey, setSilverKey] = useState('MCX_FO|SILVERMIC24AUGFUT');
+
+  const [metrics, setMetrics] = useState({ oi: 0, iv: 0, delta: 0, theta: 0 });
+  const [signals, setSignals] = useState({ rsi: 'NEUTRAL', macd: 'NEUTRAL', vwap: 'NEUTRAL', mavwap: 'NEUTRAL', adx: 'WEAK', ewo: 'NEUTRAL' });
+  const [indicatorValues, setIndicatorValues] = useState({ rsi: null, macd: null, vwap: null, mavwap: null, adx: null });
+  
+  const [niftySignals, setNiftySignals] = useState(null);
+  const [niftyIndicatorValues, setNiftyIndicatorValues] = useState(null);
+  const [giftNiftySignals, setGiftNiftySignals] = useState(null);
+  const [giftNiftyIndicatorValues, setGiftNiftyIndicatorValues] = useState(null);
+  const [bankNiftySignals, setBankNiftySignals] = useState(null);
+  const [bankNiftyIndicatorValues, setBankNiftyIndicatorValues] = useState(null);
+  const [sensexSignals, setSensexSignals] = useState(null);
+  const [sensexIndicatorValues, setSensexIndicatorValues] = useState(null);
+  
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [userToken, setUserToken] = useState('');
+  const [showTokenModal, setShowTokenModal] = useState(false);
+  const [showIndicatorModal, setShowIndicatorModal] = useState(false);
+  const [tempTokenInput, setTempTokenInput] = useState('');
+  
+  const [indicators, setIndicators] = useState({
+    qqe: true
+  });
+  
+  const [theme, setTheme] = useState('dark');
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem('upstoxToken');
+    if (savedToken) { setUserToken(savedToken); setTempTokenInput(savedToken); }
+    
+    const savedTheme = localStorage.getItem('dashboardTheme');
+    if (savedTheme) setTheme(savedTheme);
+  }, []);
+
+  const saveToken = () => { localStorage.setItem('upstoxToken', tempTokenInput); setUserToken(tempTokenInput); setShowTokenModal(false); setError(null); };
+  
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('dashboardTheme', newTheme);
+  };
+  
+  const toggleIndicator = (key) => setIndicators(prev => ({ ...prev, [key]: !prev[key] }));
+  const getAuthHeaders = () => userToken ? { 'Authorization': `Bearer ${userToken}` } : {};
+
+  useEffect(() => { setUnderlyingKey(selectedIndex === 'NIFTY' ? 'NSE_INDEX|Nifty 50' : selectedIndex === 'SENSEX' ? 'BSE_INDEX|SENSEX' : 'NSE_INDEX|Nifty Bank'); }, [selectedIndex]);
+
+  useEffect(() => {
+    const fetchContracts = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/upstox/contracts?underlyingKey=${encodeURIComponent(underlyingKey)}`, { headers: getAuthHeaders() });
+        const result = await res.json();
+        if (result.error) throw new Error(result.error);
+        if (result.data) {
+          setContracts(result.data);
+          const expiries = [...new Set(result.data.map(c => c.expiry))].sort((a, b) => new Date(a) - new Date(b));
+          setAvailableExpiries(expiries);
+          if (expiries.length > 0) setSelectedExpiry(expiries[0]);
+        }
+      } catch (err) { setError(err.message); } finally { setLoading(false); }
+    };
+    fetchContracts();
+  }, [underlyingKey, userToken]);
+
+  const getStrike = (c) => {
+    if (c.strike_price !== undefined && c.strike_price !== null) return parseFloat(c.strike_price);
+    if (c.strike !== undefined && c.strike !== null) return parseFloat(c.strike);
+    const str = c.trading_symbol || c.instrument_key || c.name || "";
+    const match = str.match(/(\d+(?:\.\d+)?)\s*(CE|PE)/i);
+    if (match) return parseFloat(match[1]);
+    return undefined;
+  };
+
+  const isOptionType = (c, type) => {
+    if (c.instrument_type === type) return true;
+    if (c.option_type === type) return true;
+    const str = c.trading_symbol || c.instrument_key || "";
+    return new RegExp(`\\d+(?:\\.\\d+)?\\s*${type}`, 'i').test(str);
+  };
+
+  useEffect(() => {
+    if (selectedExpiry && contracts.length > 0) {
+      const strikes = [...new Set(contracts.filter(c => c.expiry === selectedExpiry).map(c => getStrike(c)).filter(s => s !== undefined))].sort((a, b) => a - b);
+      setAvailableStrikes(strikes);
+      if (strikes.length > 0 && !strikes.includes(Number(selectedStrike))) setSelectedStrike(strikes[Math.floor(strikes.length / 2)].toString());
+    }
+  }, [selectedExpiry, contracts]);
+
+  const findSilverKey = async () => {
+    if (!userToken) {
+      setError("Please add your Upstox Token in settings first to search for active contracts.");
+      return;
+    }
+    try {
+      setSilverKey("Searching...");
+      const res = await fetch(`/api/upstox/search?query=SILVER`, { headers: getAuthHeaders() });
+      const result = await res.json();
+      if (result.status === 'success' && result.data && result.data.length > 0) {
+        setSilverKey(result.data[0].instrument_key);
+      } else {
+        setSilverKey("");
+        setError("Could not find any active Silver Micro contracts.");
+      }
+    } catch (e) {
+      setSilverKey("");
+      setError("Search failed: " + e.message);
+    }
+  };
+
+  useEffect(() => {
+    if (!userToken) return;
+    const fetchUnderlying = async () => {
+      try {
+        const fetchIndex = async (instrumentKey) => {
+          if (!instrumentKey) return [];
+          try {
+            const res = await fetch(`/api/upstox/history?instrumentKey=${encodeURIComponent(instrumentKey)}&interval=1minute`, { headers: getAuthHeaders() });
+            const result = await res.json();
+            if (result.error) throw new Error(result.error);
+            
+            let lastPrice = null;
+            try {
+               const quoteRes = await fetch(`/api/upstox/quotes?instrumentKey=${encodeURIComponent(instrumentKey)}`, { headers: getAuthHeaders() });
+               const quoteResult = await quoteRes.json();
+               if (quoteResult?.data) {
+                  const vals = Object.values(quoteResult.data);
+                  if (vals.length > 0) lastPrice = vals[0].last_price;
+               }
+            } catch (e) { /* ignore quote error */ }
+
+            if (result.data && result.data.candles) {
+              const uniqueCandlesMap = new Map();
+              result.data.candles.forEach(c => {
+                 const t = Math.floor(new Date(c[0]).getTime() / 1000);
+                 if (!uniqueCandlesMap.has(t)) uniqueCandlesMap.set(t, c);
+              });
+              const uniqueCandles = Array.from(uniqueCandlesMap.values());
+              const sorted = uniqueCandles.sort((a, b) => new Date(a[0]) - new Date(b[0]));
+              
+              if (sorted.length > 0 && lastPrice) {
+                 const lastCandle = sorted[sorted.length - 1];
+                 lastCandle[4] = lastPrice;
+                 lastCandle[2] = Math.max(lastCandle[2], lastPrice);
+                 lastCandle[3] = Math.min(lastCandle[3], lastPrice);
+              }
+              return aggregateCandles(sorted, timeframe);
+            }
+            return [];
+          } catch (e) {
+            console.error(`Error fetching index ${instrumentKey}:`, e);
+            return [];
+          }
+        };
+
+        const [niftyDataRaw, sensexDataRaw, bankexDataRaw, silverDataRaw, giftNiftyDataRaw, bankNiftyDataRaw] = await Promise.all([fetchIndex('NSE_INDEX|Nifty 50'), fetchIndex('BSE_INDEX|SENSEX'), fetchIndex('BSE_INDEX|BANKEX'), fetchIndex(silverKey), fetchIndex('GLOBAL_INDEX|SGX NIFTY'), fetchIndex('NSE_INDEX|Nifty Bank')]);
+        
+        if (Array.isArray(niftyDataRaw) && niftyDataRaw.length > 0) {
+          const rawCandles = niftyDataRaw;
+          setNiftyData(formatHeikinAshi(rawCandles));
+          setNiftyRawData(extractRaw(rawCandles));
+          setNiftyPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+          if (rawCandles.length > 1) {
+            setNiftyChange(((parseFloat(rawCandles[rawCandles.length-1][4]) - parseFloat(rawCandles[0][4])) / parseFloat(rawCandles[0][4]) * 100).toFixed(2));
+          }
+          const { signals: ns, values: nv } = calculateSignals(rawCandles);
+          setNiftySignals(ns);
+          setNiftyIndicatorValues(nv);
+        }
+        
+        if (Array.isArray(bankNiftyDataRaw) && bankNiftyDataRaw.length > 0) {
+          const rawCandles = bankNiftyDataRaw;
+          setBankNiftyData(formatHeikinAshi(rawCandles));
+          setBankNiftyRawData(extractRaw(rawCandles));
+          setBankNiftyPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+          if (rawCandles.length > 1) {
+            setBankNiftyChange(((parseFloat(rawCandles[rawCandles.length-1][4]) - parseFloat(rawCandles[0][4])) / parseFloat(rawCandles[0][4]) * 100).toFixed(2));
+          }
+          const { signals: ns, values: nv } = calculateSignals(rawCandles);
+          setBankNiftySignals(ns);
+          setBankNiftyIndicatorValues(nv);
+        }
+        
+        if (Array.isArray(giftNiftyDataRaw) && giftNiftyDataRaw.length > 0) {
+          const rawCandles = giftNiftyDataRaw;
+          setGiftNiftyData(formatHeikinAshi(rawCandles));
+          setGiftNiftyRawData(extractRaw(rawCandles));
+          setGiftNiftyPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+          if (rawCandles.length > 1) {
+            setGiftNiftyChange(((parseFloat(rawCandles[rawCandles.length-1][4]) - parseFloat(rawCandles[0][4])) / parseFloat(rawCandles[0][4]) * 100).toFixed(2));
+          }
+          const { signals: ns, values: nv } = calculateSignals(rawCandles);
+          setGiftNiftySignals(ns);
+          setGiftNiftyIndicatorValues(nv);
+        }
+        if (Array.isArray(sensexDataRaw) && sensexDataRaw.length > 0) {
+          const rawCandles = sensexDataRaw;
+          setSensexData(formatHeikinAshi(rawCandles));
+          setSensexRawData(extractRaw(rawCandles));
+          setSensexPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+          if (rawCandles.length > 1) {
+            setSensexChange(((parseFloat(rawCandles[rawCandles.length-1][4]) - parseFloat(rawCandles[0][4])) / parseFloat(rawCandles[0][4]) * 100).toFixed(2));
+          }
+          const { signals: ss, values: sv } = calculateSignals(rawCandles);
+          setSensexSignals(ss);
+          setSensexIndicatorValues(sv);
+        }
+        if (Array.isArray(bankexDataRaw) && bankexDataRaw.length > 0) {
+          const rawCandles = bankexDataRaw;
+          setBankexData(formatHeikinAshi(rawCandles));
+          setBankexRawData(extractRaw(rawCandles));
+          setBankexPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+          if (rawCandles.length > 1) {
+            setBankexChange(((parseFloat(rawCandles[rawCandles.length-1][4]) - parseFloat(rawCandles[0][4])) / parseFloat(rawCandles[0][4]) * 100).toFixed(2));
+          }
+          const { signals: bs, values: bv } = calculateSignals(rawCandles);
+          setBankexSignals(bs);
+          setBankexIndicatorValues(bv);
+        }
+        if (Array.isArray(silverDataRaw) && silverDataRaw.length > 0) {
+          const rawCandles = silverDataRaw;
+          setSilverData(formatHeikinAshi(rawCandles));
+          setSilverRawData(extractRaw(rawCandles));
+          setSilverPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+          if (rawCandles.length > 1) {
+            setSilverChange(((parseFloat(rawCandles[rawCandles.length-1][4]) - parseFloat(rawCandles[0][4])) / parseFloat(rawCandles[0][4]) * 100).toFixed(2));
+          }
+          const { signals: sis, values: siv } = calculateSignals(rawCandles);
+          setSilverSignals(sis);
+          setSilverIndicatorValues(siv);
+        }
+      } catch (err) {
+        if (!error) setError(`Index Data: ${err.message}`);
+      }
+    };
+
+    fetchUnderlying();
+    const intervalId = setInterval(fetchUnderlying, 5000);
+    return () => clearInterval(intervalId);
+  }, [userToken, timeframe, silverKey]);
+
+  useEffect(() => {
+    if (!selectedExpiry || !selectedStrike || !optionType || contracts.length === 0) return;
+
+    if (!contracts.some(c => c.expiry === selectedExpiry)) return;
+    const currentStrikes = contracts.filter(c => c.expiry === selectedExpiry).map(c => getStrike(c));
+    if (!currentStrikes.includes(Number(selectedStrike))) return;
+
+    const fetchLiveData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const optionContract = contracts.find(c => 
+          c.expiry === selectedExpiry && 
+          getStrike(c) == selectedStrike && 
+          isOptionType(c, optionType)
+        );
+        if (!optionContract) throw new Error("Option contract not found");
+
+        let lastPrice = null;
+        try {
+          const quoteRes = await fetch(`/api/upstox/quotes?instrumentKey=${encodeURIComponent(optionContract.instrument_key)}`, { headers: getAuthHeaders() });
+          const quoteResult = await quoteRes.json();
+          if (quoteResult?.data) {
+             const vals = Object.values(quoteResult.data);
+             if (vals.length > 0) lastPrice = vals[0].last_price;
+          }
+        } catch (e) { /* ignore quote error */ }
+
+        const historyRes = await fetch(`/api/upstox/history?instrumentKey=${encodeURIComponent(optionContract.instrument_key)}&interval=1minute`, { headers: getAuthHeaders() });
+        const historyResult = await historyRes.json();
+        
+        if (historyResult.error) throw new Error(historyResult.error);
+        
+        if (historyResult.data && historyResult.data.candles) {
+          const uniqueCandlesMap = new Map();
+          historyResult.data.candles.forEach(c => {
+             const t = Math.floor(new Date(c[0]).getTime() / 1000);
+             if (!uniqueCandlesMap.has(t)) uniqueCandlesMap.set(t, c);
+          });
+          const uniqueCandles = Array.from(uniqueCandlesMap.values()).sort((a, b) => new Date(a[0]) - new Date(b[0]));
+          
+          if (uniqueCandles.length > 0 && lastPrice) {
+             const lastCandle = uniqueCandles[uniqueCandles.length - 1];
+             lastCandle[4] = lastPrice;
+             lastCandle[2] = Math.max(lastCandle[2], lastPrice);
+             lastCandle[3] = Math.min(lastCandle[3], lastPrice);
+          }
+          const rawCandles = aggregateCandles(uniqueCandles, timeframe);
+          
+          if (rawCandles.length > 0) {
+            setStartPremium(parseFloat(rawCandles[0][4]));
+            setCurrentPremium(parseFloat(rawCandles[rawCandles.length - 1][4]));
+            const { signals: optS, values: optV } = calculateSignals(rawCandles);
+            if (optS && optV) {
+              setSignals(optS);
+              setIndicatorValues(optV);
+            }
+          }
+          setChartData(formatHeikinAshi(rawCandles));
+          setRawChartData(extractRaw(rawCandles));
+        }
+
+        const chainRes = await fetch(`/api/upstox/chain?instrumentKey=${encodeURIComponent(underlyingKey)}&expiryDate=${encodeURIComponent(selectedExpiry)}`, { headers: getAuthHeaders() });
+        const chainResult = await chainRes.json();
+        if (chainResult.data) {
+          const chainItem = chainResult.data.find(item => item.strike_price == selectedStrike);
+          if (chainItem) {
+            const optData = optionType === 'CE' ? chainItem.call_options : chainItem.put_options;
+            if (optData) setMetrics({ oi: optData.market_data?.oi || 0, iv: optData.option_greeks?.iv || 0, delta: optData.option_greeks?.delta || 0, theta: optData.option_greeks?.theta || 0 });
+          }
+        }
+      } catch (err) { 
+        setError(`Options Data: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchLiveData();
+    const intervalId = setInterval(fetchLiveData, 5000);
+    return () => clearInterval(intervalId);
+  }, [selectedExpiry, selectedStrike, optionType, contracts, underlyingKey, userToken, timeframe]);
+
+  const percentChange = startPremium ? (((currentPremium - startPremium) / startPremium) * 100).toFixed(2) : 0;
+  const isPositive = percentChange >= 0;
+
+  return (
+    <ErrorBoundary>
+      <div className={`dashboard-container ${theme === 'light' ? 'light-theme' : ''}`}>
+        <header className="dashboard-header glass-panel">
+        <div className="logo-area">
+          <Activity className="logo-icon" />
+          <h1>Options Pro</h1>
+        </div>
+        
+        <div className="nav-controls">
+          <div className="segmented-control">
+            <button className={selectedIndex === 'NIFTY' ? 'active' : ''} onClick={() => setSelectedIndex('NIFTY')}>NIFTY 50</button>
+            <button className={selectedIndex === 'BANKNIFTY' ? 'active' : ''} onClick={() => setSelectedIndex('BANKNIFTY')}>BANK NIFTY</button>
+            <button className={selectedIndex === 'SENSEX' ? 'active' : ''} onClick={() => setSelectedIndex('SENSEX')}>SENSEX</button>
+          </div>
+        </div>
+
+        <div className="user-area">
+          <span className="live-status"><span className="dot"></span> Live Data</span>
+          <button className="icon-btn" onClick={toggleTheme} title="Toggle Theme">
+             {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+          <button className="icon-btn" onClick={() => setShowIndicatorModal(true)} title="Indicators"><SlidersHorizontal size={20} /></button>
+          <button className="icon-btn" onClick={() => setShowTokenModal(true)} title="API Settings"><Settings size={20} /></button>
+        </div>
+      </header>
+
+      {error && (
+        <div className="error-banner glass-panel" style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#fca5a5', padding: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <AlertCircle size={20} />
+          <span>{error}</span>
+          {error.includes('configured') && <button className="primary-btn small ml-auto" onClick={() => setShowTokenModal(true)}>Add Token</button>}
+        </div>
+      )}
+
+      <main className="dashboard-main">
+        <section className="controls-bar glass-panel">
+          <div className="control-group">
+            <label>Expiry</label>
+            <div className="select-wrapper">
+              <select value={selectedExpiry} onChange={(e) => setSelectedExpiry(e.target.value)} disabled={availableExpiries.length === 0}>
+                {availableExpiries.map(exp => <option key={exp} value={exp}>{new Date(exp).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}</option>)}
+              </select>
+              <ChevronDown className="select-icon" size={16} />
+            </div>
+          </div>
+
+          <div className="control-group">
+            <label>Strike Price</label>
+            <div className="select-wrapper">
+              <select value={selectedStrike} onChange={(e) => setSelectedStrike(e.target.value)} disabled={availableStrikes.length === 0}>
+                {availableStrikes.map(strike => <option key={strike} value={strike}>{strike}</option>)}
+              </select>
+              <ChevronDown className="select-icon" size={16} />
+            </div>
+          </div>
+
+          <div className="control-group">
+            <label>Option Type</label>
+            <div className="segmented-control small">
+              <button className={`call-btn ${optionType === 'CE' ? 'active' : ''}`} onClick={() => setOptionType('CE')}>CALL (CE)</button>
+              <button className={`put-btn ${optionType === 'PE' ? 'active' : ''}`} onClick={() => setOptionType('PE')}>PUT (PE)</button>
+            </div>
+          </div>
+
+          <div className="control-group">
+            <label>View</label>
+            <div className="select-wrapper">
+              <select value={chartType} onChange={(e) => setChartType(e.target.value)}>
+                <option value="Heikin Ashi">Heikin Ashi</option>
+                <option value="Candles">Normal Candles</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="control-group">
+            <label>Timeframe</label>
+            <div className="segmented-control small">
+              <button className={timeframe === '1minute' ? 'active' : ''} onClick={() => setTimeframe('1minute')}>1m</button>
+              <button className={timeframe === '3minute' ? 'active' : ''} onClick={() => setTimeframe('3minute')}>3m</button>
+              <button className={timeframe === '5minute' ? 'active' : ''} onClick={() => setTimeframe('5minute')}>5m</button>
+              <button className={timeframe === '15minute' ? 'active' : ''} onClick={() => setTimeframe('15minute')}>15m</button>
+              <button className={timeframe === '30minute' ? 'active' : ''} onClick={() => setTimeframe('30minute')}>30m</button>
+              <button className={timeframe === 'day' ? 'active' : ''} onClick={() => setTimeframe('day')}>1D</button>
+              <button className={timeframe === 'week' ? 'active' : ''} onClick={() => setTimeframe('week')}>1W</button>
+            </div>
+          </div>
+        </section>
+
+        <div className="content-grid">
+          <section className="chart-section glass-panel">
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {selectedIndex} {selectedStrike} {optionType} {loading && <Loader2 size={16} className="spinner" />}
+                </h2>
+                <p className="subtitle">Premium ({timeframe === 'day' ? '1D' : timeframe === 'week' ? '1W' : timeframe.replace('minute', 'm')} {chartType})</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{currentPremium.toFixed(2)}</span>
+                <span className={`price-change ${isPositive ? 'positive' : 'negative'}`}>
+                  {isPositive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(percentChange)}%
+                </span>
+              </div>
+            </div>
+            
+            <div className="chart-container" style={{ width: '100%', height: 500, position: 'relative' }}>
+              {chartData.length > 0 ? (
+                <HeikinAshiChart haData={chartData} rawData={rawChartData} indicators={indicators} theme={theme} chartType={chartType} />
+              ) : (
+                <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading chart data...</div>
+              )}
+            </div>
+          </section>
+
+          <aside className="metrics-sidebar">
+            <div className="summary-card glass-panel" style={{ flexGrow: 1, padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+              <SignalBoard title="Option" signals={signals} values={indicatorValues} />
+            </div>
+
+            <div className="metric-card glass-panel">
+              <div className="metric-icon"><BarChart3 size={20} /></div>
+              <div className="metric-info">
+                <h3>Open Interest</h3>
+                <p>{(metrics.oi || 0).toLocaleString()}</p>
+              </div>
+            </div>
+            <div className="metric-card glass-panel">
+              <div className="metric-icon"><Activity size={20} /></div>
+              <div className="metric-info">
+                <h3>Implied Volatility (IV)</h3>
+                <p>{(metrics.iv * 100).toFixed(2)}%</p>
+              </div>
+            </div>
+            <div className="metric-card glass-panel">
+              <div className="metric-icon"><DollarSign size={20} /></div>
+              <div className="metric-info">
+                <h3>Delta</h3>
+                <p>{(metrics.delta || 0).toFixed(4)}</p>
+              </div>
+            </div>
+            <div className="metric-card glass-panel">
+              <div className="metric-icon"><Clock size={20} /></div>
+              <div className="metric-info">
+                <h3>Theta</h3>
+                <p>{(metrics.theta || 0).toFixed(4)}</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <section className="bottom-charts-grid">
+          <div className={`chart-section glass-panel ${fullScreenChart === 'NIFTY' ? 'fullscreen-chart' : ''}`}>
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  NIFTY 50
+                  <button className="icon-btn" onClick={() => setFullScreenChart(fullScreenChart === 'NIFTY' ? null : 'NIFTY')}>
+                    {fullScreenChart === 'NIFTY' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </h2>
+                <p className="subtitle">Underlying Index ({timeframe.replace('minute', 'm')} Heikin Ashi)</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{niftyPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`price-change ${niftyChange >= 0 ? 'positive' : 'negative'}`}>
+                  {niftyChange >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(niftyChange)}%
+                </span>
+              </div>
+            </div>
+            <div className="chart-container" style={{ width: '100%', height: fullScreenChart === 'NIFTY' ? 'calc(100vh - 100px)' : 400, position: 'relative' }}>
+              {niftyData.length > 0 ? <HeikinAshiChart haData={niftyData} rawData={niftyRawData} indicators={indicators} theme={theme} chartType={chartType} /> : <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading...</div>}
+            </div>
+            <SignalBoard title="NIFTY 50" signals={niftySignals} values={niftyIndicatorValues} />
+          </div>
+
+          <div className={`chart-section glass-panel ${fullScreenChart === 'BANKNIFTY' ? 'fullscreen-chart' : ''}`}>
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  BANK NIFTY
+                  <button className="icon-btn" onClick={() => setFullScreenChart(fullScreenChart === 'BANKNIFTY' ? null : 'BANKNIFTY')}>
+                    {fullScreenChart === 'BANKNIFTY' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </h2>
+                <p className="subtitle">Underlying Index ({timeframe.replace('minute', 'm')} Heikin Ashi)</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{bankNiftyPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`price-change ${bankNiftyChange >= 0 ? 'positive' : 'negative'}`}>
+                  {bankNiftyChange >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(bankNiftyChange)}%
+                </span>
+              </div>
+            </div>
+            <div className="chart-container" style={{ width: '100%', height: fullScreenChart === 'BANKNIFTY' ? 'calc(100vh - 100px)' : 400, position: 'relative' }}>
+              {bankNiftyData.length > 0 ? <HeikinAshiChart haData={bankNiftyData} rawData={bankNiftyRawData} indicators={indicators} theme={theme} chartType={chartType} /> : <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading...</div>}
+            </div>
+            <SignalBoard title="BANK NIFTY" signals={bankNiftySignals} values={bankNiftyIndicatorValues} />
+          </div>
+
+          <div className={`chart-section glass-panel ${fullScreenChart === 'GIFT' ? 'fullscreen-chart' : ''}`}>
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  GIFT NIFTY
+                  <button className="icon-btn" onClick={() => setFullScreenChart(fullScreenChart === 'GIFT' ? null : 'GIFT')}>
+                    {fullScreenChart === 'GIFT' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </h2>
+                <p className="subtitle">Global Index ({timeframe.replace('minute', 'm')} Heikin Ashi)</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{giftNiftyPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`price-change ${giftNiftyChange >= 0 ? 'positive' : 'negative'}`}>
+                  {giftNiftyChange >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(giftNiftyChange)}%
+                </span>
+              </div>
+            </div>
+            <div className="chart-container" style={{ width: '100%', height: fullScreenChart === 'GIFT' ? 'calc(100vh - 100px)' : 400, position: 'relative' }}>
+              {giftNiftyData.length > 0 ? <HeikinAshiChart haData={giftNiftyData} rawData={giftNiftyRawData} indicators={indicators} theme={theme} chartType={chartType} /> : <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading...</div>}
+            </div>
+            <SignalBoard title="GIFT NIFTY" signals={giftNiftySignals} values={giftNiftyIndicatorValues} />
+          </div>
+
+          <div className={`chart-section glass-panel ${fullScreenChart === 'SENSEX' ? 'fullscreen-chart' : ''}`}>
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  SENSEX
+                  <button className="icon-btn" onClick={() => setFullScreenChart(fullScreenChart === 'SENSEX' ? null : 'SENSEX')}>
+                    {fullScreenChart === 'SENSEX' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </h2>
+                <p className="subtitle">Underlying Index ({timeframe.replace('minute', 'm')} Heikin Ashi)</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{sensexPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`price-change ${sensexChange >= 0 ? 'positive' : 'negative'}`}>
+                  {sensexChange >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(sensexChange)}%
+                </span>
+              </div>
+            </div>
+            <div className="chart-container" style={{ width: '100%', height: fullScreenChart === 'SENSEX' ? 'calc(100vh - 100px)' : 400, position: 'relative' }}>
+              {sensexData.length > 0 ? <HeikinAshiChart haData={sensexData} rawData={sensexRawData} indicators={indicators} theme={theme} chartType={chartType} /> : <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading...</div>}
+            </div>
+            <SignalBoard title="SENSEX" signals={sensexSignals} values={sensexIndicatorValues} theme={theme} />
+          </div>
+
+          <div className={`chart-section glass-panel ${fullScreenChart === 'BANKEX' ? 'fullscreen-chart' : ''}`}>
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  BANKEX
+                  <button className="icon-btn" onClick={() => setFullScreenChart(fullScreenChart === 'BANKEX' ? null : 'BANKEX')}>
+                    {fullScreenChart === 'BANKEX' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </h2>
+                <p className="subtitle">Underlying Index ({timeframe.replace('minute', 'm')} Heikin Ashi)</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{bankexPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`price-change ${bankexChange >= 0 ? 'positive' : 'negative'}`}>
+                  {bankexChange >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(bankexChange)}%
+                </span>
+              </div>
+            </div>
+            <div className="chart-container" style={{ width: '100%', height: fullScreenChart === 'BANKEX' ? 'calc(100vh - 100px)' : 400, position: 'relative' }}>
+              {bankexData.length > 0 ? <HeikinAshiChart haData={bankexData} rawData={bankexRawData} indicators={indicators} theme={theme} chartType={chartType} /> : <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading...</div>}
+            </div>
+            <SignalBoard title="BANKEX" signals={bankexSignals} values={bankexIndicatorValues} theme={theme} />
+          </div>
+
+          <div className={`chart-section glass-panel ${fullScreenChart === 'SILVER' ? 'fullscreen-chart' : ''}`} style={fullScreenChart !== 'SILVER' ? { gridColumn: '1 / -1' } : {}}>
+            <div className="chart-header">
+              <div>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input 
+                    type="text" 
+                    value={silverKey} 
+                    onChange={e => setSilverKey(e.target.value)} 
+                    style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: 'inherit', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '1rem', width: '250px' }}
+                    title="Edit MCX Instrument Key"
+                  />
+                  <button className="icon-btn" onClick={findSilverKey} title="Auto-find active Silver contract">
+                    <Search size={16} />
+                  </button>
+                  <button className="icon-btn" onClick={() => setFullScreenChart(fullScreenChart === 'SILVER' ? null : 'SILVER')}>
+                    {fullScreenChart === 'SILVER' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </button>
+                </h2>
+                <p className="subtitle">Underlying Asset ({timeframe.replace('minute', 'm')} Heikin Ashi)</p>
+              </div>
+              <div className="price-display">
+                <span className="current-price">₹{silverPremium.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className={`price-change ${silverChange >= 0 ? 'positive' : 'negative'}`}>
+                  {silverChange >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {Math.abs(silverChange)}%
+                </span>
+              </div>
+            </div>
+            <div className="chart-container" style={{ width: '100%', height: fullScreenChart === 'SILVER' ? 'calc(100vh - 100px)' : 400, position: 'relative' }}>
+              {silverData.length > 0 ? <HeikinAshiChart haData={silverData} rawData={silverRawData} indicators={indicators} theme={theme} chartType={chartType} /> : <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Waiting for valid Instrument Key...</div>}
+            </div>
+            {silverSignals && <SignalBoard title="MCX SILVER" signals={silverSignals} values={silverIndicatorValues} theme={theme} />}
+          </div>
+        </section>
+      </main>
+
+      {/* Indicator Modal */}
+      {showIndicatorModal && (
+        <div className="modal-overlay">
+          <div className="modal-content glass-panel">
+            <div className="modal-header">
+              <h2>Technical Indicators</h2>
+              <button className="icon-btn" onClick={() => setShowIndicatorModal(false)}><X size={20}/></button>
+            </div>
+            <div className="modal-body">
+              <div className="flex flex-col space-y-4">
+                <p className="modal-desc">Toggle mathematical indicators. These are computed natively from the live 5m Upstox data.</p>
+                <label className="flex items-center space-x-2 text-sm text-slate-600 dark:text-slate-300">
+                  <input type="checkbox" checked={indicators.qqe} onChange={() => toggleIndicator('qqe')} className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" />
+                  <span>QQE MOD</span>
+                </label>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="primary-btn" onClick={() => setShowIndicatorModal(false)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Token Modal */}
+      {showTokenModal && (
+        <div className="modal-overlay">
+          <div className="modal-content glass-panel">
+            <div className="modal-header">
+              <h2>API Settings</h2>
+              <button className="icon-btn" onClick={() => setShowTokenModal(false)}><X size={20}/></button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-desc">Enter your Upstox Access Token to fetch live market data. This is stored securely in your browser's local storage.</p>
+              <div className="input-group">
+                <label>Upstox Token</label>
+                <input 
+                  type="password" 
+                  value={tempTokenInput} 
+                  onChange={e => setTempTokenInput(e.target.value)}
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5c..."
+                  className="token-input"
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="secondary-btn" onClick={() => setShowTokenModal(false)}>Cancel</button>
+              <button className="primary-btn" onClick={saveToken}>Save & Connect</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+    </ErrorBoundary>
+  );
+}
