@@ -831,23 +831,23 @@ const SignalBoard = ({ title, signals, values }) => {
       </h3>
       <div className="summary-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem' }}>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>RSI (14) {values.rsi !== null ? `(${values.rsi.toFixed(2)})` : ''}</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>RSI (14) {values.rsi != null ? `(${values.rsi.toFixed(2)})` : ''}</span>
           <span className={`badge ${signals.rsi.toLowerCase()}`}>{signals.rsi}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MACD {values.macd !== null ? `(${values.macd.toFixed(2)})` : ''}</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MACD {values.macd != null ? `(${values.macd.toFixed(2)})` : ''}</span>
           <span className={`badge ${signals.macd.toLowerCase()}`}>{signals.macd}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>VWAP {values.vwap !== null ? `(${values.vwap.toFixed(2)})` : ''}</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>VWAP {values.vwap != null ? `(${values.vwap.toFixed(2)})` : ''}</span>
           <span className={`badge ${signals.vwap.toLowerCase()}`}>{signals.vwap}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MAVWAP {values.mavwap !== null ? `(${values.mavwap.toFixed(2)})` : ''}</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>MAVWAP {values.mavwap != null ? `(${values.mavwap.toFixed(2)})` : ''}</span>
           <span className={`badge ${signals.mavwap.toLowerCase()}`}>{signals.mavwap}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>ADX {values.adx !== null ? `(${values.adx.toFixed(2)})` : ''}</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>ADX {values.adx != null ? `(${values.adx.toFixed(2)})` : ''}</span>
           <span className={`badge ${signals.adx.toLowerCase()}`}>{signals.adx}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
@@ -1407,7 +1407,7 @@ export default function Dashboard() {
                 <p className="subtitle">Premium ({timeframe === 'day' ? '1D' : timeframe === 'week' ? '1W' : timeframe.replace('minute', 'm')} {chartType})</p>
               </div>
               <div className="price-display">
-                <span className="current-price">₹{currentPremium.toFixed(2)}</span>
+                <span className="current-price">₹{(currentPremium || 0).toFixed(2)}</span>
                 <span className={`price-change ${isPositive ? 'positive' : 'negative'}`}>
                   {isPositive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
                   {Math.abs(percentChange)}%
