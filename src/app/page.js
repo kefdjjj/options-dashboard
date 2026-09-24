@@ -42,6 +42,8 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const [drawMode, setDrawMode] = useState('none');
   const hLinesRef = useRef([]);
   const vLineDataRef = useRef([]);
+  const utbotLineRef = useRef(null);
+  const utbotMarkersRef = useRef(null);
   const ewMarkersRef = useRef(null);
   const fibLinesRefAuto = useRef([]);
   const overlayRef = useRef(null);
@@ -217,7 +219,63 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
         fibLinesRefAuto.current = [];
       }
       
-      const ewRes = calculateAutoFibElliott(rawData);
+      
+    if (indicators.utbot && seriesRefs.current.candle) {
+      if (!utbotLineRef.current) {
+        utbotLineRef.current = chartInstance.current.addSeries(LineSeries, {
+          lineWidth: 2, lineStyle: 2, title: 'UT Bot Stop', crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+        });
+      }
+
+      const atrResult = ATR.calculate({ high: highs, low: lows, close: closes, period: 10 });
+      let prevStop = 0; let prevPos = 0; const utbotMarkers = [];
+      const offset = rawData.length - atrResult.length;
+      const stopLineData = [];
+      
+      for (let i = offset; i < rawData.length; i++) {
+        const atrVal = atrResult[i - offset];
+        if (isNaN(atrVal) || atrVal === null) continue;
+        
+        const nLoss = 2 * atrVal;
+        const src = closes[i];
+        const prevSrc = i > offset ? closes[i - 1] : src;
+        
+        let currentStop = prevStop;
+        if (src > prevStop && prevSrc > prevStop) currentStop = Math.max(prevStop, src - nLoss);
+        else if (src < prevStop && prevSrc < prevStop) currentStop = Math.min(prevStop, src + nLoss);
+        else if (src > prevStop) currentStop = src - nLoss;
+        else currentStop = src + nLoss;
+        
+        let currentPos = prevPos;
+        if (prevSrc < prevStop && src > currentStop) currentPos = 1;
+        else if (prevSrc > prevStop && src < currentStop) currentPos = -1;
+        else if (prevPos === 0) currentPos = src > currentStop ? 1 : -1;
+        
+        if (currentPos === 1 && prevPos !== 1) utbotMarkers.push({ time: rawData[i].time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: 'BUY' });
+        else if (currentPos === -1 && prevPos !== -1) utbotMarkers.push({ time: rawData[i].time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: 'SELL' });
+        
+        stopLineData.push({ time: rawData[i].time, value: currentStop, color: currentPos === 1 ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)' });
+
+        prevStop = currentStop; prevPos = currentPos;
+      }
+      
+      utbotLineRef.current.setData(stopLineData);
+      if (!utbotMarkersRef.current) {
+        utbotMarkersRef.current = createSeriesMarkers(seriesRefs.current.candle, utbotMarkers);
+      } else {
+        utbotMarkersRef.current.setMarkers(utbotMarkers);
+      }
+    } else {
+      if (utbotLineRef.current) {
+        chartInstance.current.removeSeries(utbotLineRef.current);
+        utbotLineRef.current = null;
+      }
+      if (utbotMarkersRef.current) {
+        utbotMarkersRef.current.setMarkers([]);
+      }
+    }
+
+    const ewRes = calculateAutoFibElliott(rawData);
       if (seriesRefs.current.ewLine) seriesRefs.current.ewLine.setData(ewRes.waveLines);
       
       if (!ewMarkersRef.current) ewMarkersRef.current = createSeriesMarkers(seriesRefs.current.candle, ewRes.markers);
@@ -896,7 +954,7 @@ export default function Dashboard() {
   const [tempTokenInput, setTempTokenInput] = useState('');
   
   const [indicators, setIndicators] = useState({
-    qqe: true
+    qqe: true, utbot: true
   });
   
   const [theme, setTheme] = useState('dark');
@@ -923,11 +981,47 @@ export default function Dashboard() {
   useEffect(() => { setUnderlyingKey(selectedIndex === 'NIFTY' ? 'NSE_INDEX|Nifty 50' : selectedIndex === 'SENSEX' ? 'BSE_INDEX|SENSEX' : 'NSE_INDEX|Nifty Bank'); }, [selectedIndex]);
 
   useEffect(() => {
-    const fetchContracts = async () => {
+    
+  const fetchHistoryDirect = async (instrumentKey, timeframeParam) => {
+    if (!instrumentKey) return null;
+    const interval = timeframeParam === '3m' || timeframeParam === '1m' ? '1minute' : timeframeParam === '5m' ? '5minute' : timeframeParam === '15m' ? '15minute' : '1minute';
+    const encodedKey = encodeURIComponent(instrumentKey);
+    const headers = { 'Accept': 'application/json', ...getAuthHeaders() };
+    
+    const toDate = new Date();
+    const fromDate = new Date();
+    fromDate.setDate(toDate.getDate() - 30);
+    const formatDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const toStr = formatDate(toDate);
+    const fromStr = formatDate(fromDate);
+    
+    try {
+      const [intraRes, histRes] = await Promise.all([
+        fetch(`https://api.upstox.com/v2/historical-candle/intraday/${encodedKey}/${interval}`, { headers }).catch(() => null),
+        fetch(`https://api.upstox.com/v2/historical-candle/${encodedKey}/${interval}/${toStr}/${fromStr}`, { headers }).catch(() => null)
+      ]);
+      const safeJson = async (r) => { if (!r || !r.ok) return null; try { return await r.json(); } catch(e) { return null; } };
+      const intraData = await safeJson(intraRes);
+      const histData = await safeJson(histRes);
+      let combined = [];
+      if (intraData?.data?.candles) combined = combined.concat(intraData.data.candles);
+      if (histData?.data?.candles) combined = combined.concat(histData.data.candles);
+      if (combined.length === 0) return null;
+      const uniqueMap = new Map();
+      combined.forEach(c => { if (!uniqueMap.has(c[0])) uniqueMap.set(c[0], c); });
+      const finalCandles = Array.from(uniqueMap.values());
+      finalCandles.sort((a, b) => new Date(b[0]) - new Date(a[0])); // descending
+      return finalCandles; // return descending
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const fetchContracts = async () => {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/upstox/contracts?underlyingKey=${encodeURIComponent(underlyingKey)}`, { headers: getAuthHeaders() });
+        const res = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(underlyingKey)}`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
         const result = await res.json();
         if (result.error) throw new Error(result.error);
         if (result.data) {
@@ -972,11 +1066,22 @@ export default function Dashboard() {
     }
     try {
       setSilverKey("Searching...");
-      const res = await fetch(`/api/upstox/search?query=SILVER`, { headers: getAuthHeaders() });
-      const result = await res.json();
-      if (result.status === 'success' && result.data && result.data.length > 0) {
-        setSilverKey(result.data[0].instrument_key);
-      } else {
+      const query = 'SILVER';
+        const res = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://assets.upstox.com/market-quote/instruments/exchange/MCX.csv.gz'));
+        const blob = await res.blob();
+        const ds = new DecompressionStream('gzip');
+        const decompressedStream = blob.stream().pipeThrough(ds);
+        const resp = new Response(decompressedStream);
+        const dataStr = await resp.text();
+        const lines = dataStr.split('\n');
+        const matches = lines.filter(l => l.includes(query) && !l.includes('OPTFUT') && l.includes('FUT'));
+        if (matches.length > 0) {
+          const parts = matches[0].split(',');
+          const key = parts[0]?.replace(/"/g, '');
+          if (key) {
+            setSilverKey(key);
+          }
+        } else {
         setSilverKey("");
         setError("Could not find any active Silver Micro contracts.");
       }
@@ -993,13 +1098,13 @@ export default function Dashboard() {
         const fetchIndex = async (instrumentKey) => {
           if (!instrumentKey) return [];
           try {
-            const res = await fetch(`/api/upstox/history?instrumentKey=${encodeURIComponent(instrumentKey)}&interval=1minute`, { headers: getAuthHeaders() });
+            const res = await fetch(`https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(instrumentKey)}/1minute`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
             const result = await res.json();
             if (result.error) throw new Error(result.error);
             
             let lastPrice = null;
             try {
-               const quoteRes = await fetch(`/api/upstox/quotes?instrumentKey=${encodeURIComponent(instrumentKey)}`, { headers: getAuthHeaders() });
+               const quoteRes = await fetch(`https://api.upstox.com/v2/market-quote/quotes?instrument_key=${encodeURIComponent(instrumentKey)}`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
                const quoteResult = await quoteRes.json();
                if (quoteResult?.data) {
                   const vals = Object.values(quoteResult.data);
@@ -1137,7 +1242,7 @@ export default function Dashboard() {
 
         let lastPrice = null;
         try {
-          const quoteRes = await fetch(`/api/upstox/quotes?instrumentKey=${encodeURIComponent(optionContract.instrument_key)}`, { headers: getAuthHeaders() });
+          const quoteRes = await fetch(`https://api.upstox.com/v2/market-quote/quotes?instrument_key=${encodeURIComponent(optionContract.instrument_key)}`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
           const quoteResult = await quoteRes.json();
           if (quoteResult?.data) {
              const vals = Object.values(quoteResult.data);
@@ -1145,7 +1250,7 @@ export default function Dashboard() {
           }
         } catch (e) { /* ignore quote error */ }
 
-        const historyRes = await fetch(`/api/upstox/history?instrumentKey=${encodeURIComponent(optionContract.instrument_key)}&interval=1minute`, { headers: getAuthHeaders() });
+        const historyRes = await fetch(`https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(optionContract.instrument_key)}/1minute`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
         const historyResult = await historyRes.json();
         
         if (historyResult.error) throw new Error(historyResult.error);
@@ -1179,7 +1284,7 @@ export default function Dashboard() {
           setRawChartData(extractRaw(rawCandles));
         }
 
-        const chainRes = await fetch(`/api/upstox/chain?instrumentKey=${encodeURIComponent(underlyingKey)}&expiryDate=${encodeURIComponent(selectedExpiry)}`, { headers: getAuthHeaders() });
+        const chainRes = await fetch(`https://api.upstox.com/v2/option/chain?instrument_key=${encodeURIComponent(underlyingKey)}&expiry_date=${encodeURIComponent(selectedExpiry)}`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
         const chainResult = await chainRes.json();
         if (chainResult.data) {
           const chainItem = chainResult.data.find(item => item.strike_price == selectedStrike);
