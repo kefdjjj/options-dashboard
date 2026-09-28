@@ -165,6 +165,12 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       chart.remove();
       if (overlayRef.current) overlayRef.current.remove();
       overlayRef.current = null;
+      utbotLineRef.current = null;
+      utbotMarkersRef.current = null;
+      ewMarkersRef.current = null;
+      rbtMarkersRef.current = null;
+      rbtLinesRef.current = [];
+      fibLinesRefAuto.current = [];
       
     };
   }, [indicators, theme, chartType]);
