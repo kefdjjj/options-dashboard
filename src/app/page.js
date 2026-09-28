@@ -726,7 +726,7 @@ const calculateRBT = (highs, lows, closes, times) => {
                 lastRight = i; let h = b.hi - b.lo, edge = up ? b.hi : b.lo, px = up ? edge + mult * h : edge - mult * h;
                 tLine.push({ px, up, from: i, edge, far: up ? b.lo : b.hi, rt: false });
                 markers.push({ time: times[i], position: up ? 'belowBar' : 'aboveBar', color: up ? '#2E8B60' : '#B5453C', shape: up ? 'arrowUp' : 'arrowDown', text: up ? 'RBT UP' : 'RBT DN' });
-                if (i === closes.length - 1) sig = up ? 'BULLISH' : 'BEARISH';
+                
                 pBox.splice(j, 1); if (curOpen) curOpen = false;
             } else if (i - b.waitFrom >= waitBrk) {
                 lastRight = Math.max(lastRight, i); pBox.splice(j, 1);
@@ -745,6 +745,10 @@ const calculateRBT = (highs, lows, closes, times) => {
                 tLine.splice(j, 1);
             } else if (i - t.from >= expireAt) { tLine.splice(j, 1); }
         }
+    }
+        if (tLine.length > 0) {
+        let lastT = tLine[tLine.length - 1];
+        sig = lastT.up ? 'BULLISH' : 'BEARISH';
     }
     return { markers, activeTargets: tLine, sig };
 };
