@@ -1191,9 +1191,9 @@ const [indicators, setIndicators] = useState({
         const fetchIndex = async (instrumentKey) => {
           if (!instrumentKey) return [];
           try {
-            const res = await fetch(`https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(instrumentKey)}/1minute`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
-            const result = await res.json();
-            if (result.error) throw new Error(result.error);
+            const finalCandles = await fetchHistoricalData(instrumentKey, '1minute');
+            if (!finalCandles) throw new Error("Failed to fetch historical data for index");
+            const result = { data: { candles: finalCandles } };
             
             let lastPrice = null;
             try {
@@ -1343,10 +1343,9 @@ const [indicators, setIndicators] = useState({
           }
         } catch (e) { /* ignore quote error */ }
 
-        const historyRes = await fetch(`https://api.upstox.com/v2/historical-candle/intraday/${encodeURIComponent(optionContract.instrument_key)}/1minute`, { headers: { 'Accept': 'application/json', ...getAuthHeaders() } });
-        const historyResult = await historyRes.json();
-        
-        if (historyResult.error) throw new Error(historyResult.error);
+        const finalCandles = await fetchHistoricalData(optionContract.instrument_key, '1minute');
+        if (!finalCandles) throw new Error("Failed to fetch historical data for option");
+        const historyResult = { data: { candles: finalCandles } };
         
         if (historyResult.data && historyResult.data.candles) {
           const uniqueCandlesMap = new Map();
