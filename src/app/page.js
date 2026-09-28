@@ -1075,41 +1075,7 @@ const [indicators, setIndicators] = useState({
 
   useEffect(() => {
     
-  const fetchHistoryDirect = async (instrumentKey, timeframeParam) => {
-    if (!instrumentKey) return null;
-    const interval = timeframeParam === '3m' || timeframeParam === '1m' ? '1minute' : timeframeParam === '5m' ? '5minute' : timeframeParam === '15m' ? '15minute' : '1minute';
-    const encodedKey = encodeURIComponent(instrumentKey);
-    const headers = { 'Accept': 'application/json', ...getAuthHeaders() };
-    
-    const toDate = new Date();
-    const fromDate = new Date();
-    fromDate.setDate(toDate.getDate() - 30);
-    const formatDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    const toStr = formatDate(toDate);
-    const fromStr = formatDate(fromDate);
-    
-    try {
-      const [intraRes, histRes] = await Promise.all([
-        fetch(`https://api.upstox.com/v2/historical-candle/intraday/${encodedKey}/${interval}`, { headers }).catch(() => null),
-        fetch(`https://api.upstox.com/v2/historical-candle/${encodedKey}/${interval}/${toStr}/${fromStr}`, { headers }).catch(() => null)
-      ]);
-      const safeJson = async (r) => { if (!r || !r.ok) return null; try { return await r.json(); } catch(e) { return null; } };
-      const intraData = await safeJson(intraRes);
-      const histData = await safeJson(histRes);
-      let combined = [];
-      if (intraData?.data?.candles) combined = combined.concat(intraData.data.candles);
-      if (histData?.data?.candles) combined = combined.concat(histData.data.candles);
-      if (combined.length === 0) return null;
-      const uniqueMap = new Map();
-      combined.forEach(c => { if (!uniqueMap.has(c[0])) uniqueMap.set(c[0], c); });
-      const finalCandles = Array.from(uniqueMap.values());
-      finalCandles.sort((a, b) => new Date(b[0]) - new Date(a[0])); // descending
-      return finalCandles; // return descending
-    } catch (e) {
-      return null;
-    }
-  };
-
+  
   const fetchContracts = async () => {
       setLoading(true);
       setError(null);
@@ -1191,7 +1157,7 @@ const [indicators, setIndicators] = useState({
         const fetchIndex = async (instrumentKey) => {
           if (!instrumentKey) return [];
           try {
-            const finalCandles = await fetchHistoricalData(instrumentKey, '1minute');
+            const finalCandles = await fetchHistoryDirect(instrumentKey, '1minute');
             if (!finalCandles) throw new Error("Failed to fetch historical data for index");
             const result = { data: { candles: finalCandles } };
             
@@ -1343,7 +1309,7 @@ const [indicators, setIndicators] = useState({
           }
         } catch (e) { /* ignore quote error */ }
 
-        const finalCandles = await fetchHistoricalData(optionContract.instrument_key, '1minute');
+        const finalCandles = await fetchHistoryDirect(optionContract.instrument_key, '1minute');
         if (!finalCandles) throw new Error("Failed to fetch historical data for option");
         const historyResult = { data: { candles: finalCandles } };
         
