@@ -45,6 +45,8 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
   const utbotLineRef = useRef(null);
   const utbotMarkersRef = useRef(null);
   const ewMarkersRef = useRef(null);
+  const rbtMarkersRef = useRef(null);
+  const rbtLinesRef = useRef([]);
   const fibLinesRefAuto = useRef([]);
   const overlayRef = useRef(null);
   const blockElementsRef = useRef([]);
@@ -220,6 +222,20 @@ const HeikinAshiChart = ({ haData, rawData, indicators, theme, chartType }) => {
       }
       
       
+    if (indicators.rbt && seriesRefs.current.candle) {
+      if (rbtLinesRef.current.length > 0) { rbtLinesRef.current.forEach(line => seriesRefs.current.candle.removePriceLine(line)); rbtLinesRef.current = []; }
+      const rbtRes = calculateRBT(highs, lows, closes, rawData.map(d => d.time));
+      rbtRes.activeTargets.forEach(t => {
+        const line = seriesRefs.current.candle.createPriceLine({ price: t.px, color: t.up ? '#2E8B60' : '#B5453C', lineWidth: 1, lineStyle: 2, title: 'RBT TGT' });
+        rbtLinesRef.current.push(line);
+      });
+      if (!rbtMarkersRef.current) rbtMarkersRef.current = createSeriesMarkers(seriesRefs.current.candle, rbtRes.markers);
+      else rbtMarkersRef.current.setMarkers(rbtRes.markers);
+    } else {
+      if (rbtLinesRef.current.length > 0 && seriesRefs.current.candle) { rbtLinesRef.current.forEach(line => seriesRefs.current.candle.removePriceLine(line)); rbtLinesRef.current = []; }
+      if (rbtMarkersRef.current) { rbtMarkersRef.current.setMarkers([]); }
+    }
+
     if (indicators.utbot && seriesRefs.current.candle) {
       if (!utbotLineRef.current) {
         utbotLineRef.current = chartInstance.current.addSeries(LineSeries, {
@@ -818,6 +834,9 @@ const calculateSignals = (rawCandles) => {
     });
   }
 
+  const rbtResSig = calculateRBT(highs, lows, closes, new Array(closes.length).fill(0));
+  newSignals.rbt = rbtResSig.sig;
+  
   return { signals: newSignals, values: newVals };
 };
 
@@ -849,6 +868,10 @@ const SignalBoard = ({ title, signals, values }) => {
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
           <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>ADX {values.adx != null ? `(${values.adx.toFixed(2)})` : ''}</span>
           <span className={`badge ${signals.adx.toLowerCase()}`}>{signals.adx}</span>
+        </div>
+        <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Range Breakout</span>
+          <span className={`badge ${(signals.rbt || 'NEUTRAL').toLowerCase()}`}>{signals.rbt || 'NEUTRAL'}</span>
         </div>
         <div className="summary-item" style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'rgba(0,0,0,0.1)', borderRadius: '6px' }}>
           <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Elliott Wave</span>
@@ -953,8 +976,77 @@ export default function Dashboard() {
   const [showIndicatorModal, setShowIndicatorModal] = useState(false);
   const [tempTokenInput, setTempTokenInput] = useState('');
   
-  const [indicators, setIndicators] = useState({
-    qqe: true, utbot: true
+  
+// RBT helper func
+const calculateRBT = (highs, lows, closes, times) => {
+    const win = 10, hist = 200, pct = 30, minBars = 15, waitBrk = 80, mult = 1.0, expireAt = 120;
+    const rng = new Array(closes.length).fill(null);
+    for (let i = win - 1; i < closes.length; i++) {
+        let h = Math.max(...highs.slice(i - win + 1, i + 1));
+        let l = Math.min(...lows.slice(i - win + 1, i + 1));
+        rng[i] = (h - l) / closes[i];
+    }
+    const tight = new Array(closes.length).fill(false);
+    for (let i = hist; i < closes.length; i++) {
+        let windowRng = rng.slice(i - hist + 1, i + 1).filter(v => v !== null);
+        windowRng.sort((a, b) => a - b);
+        let rank = Math.round((pct / 100) * (windowRng.length - 1));
+        tight[i] = rng[i] <= windowRng[rank];
+    }
+    let curFrom = null, lastRight = -1, curHi = null, curLo = null, curOpen = false;
+    let pBox = [], tLine = [], markers = [], sig = 'NEUTRAL';
+    for (let i = hist; i < closes.length; i++) {
+        if (tight[i]) {
+            if (!curOpen) {
+                curOpen = true; curFrom = Math.max(i - (win - 1), lastRight + 1);
+                curHi = highs[i]; curLo = lows[i];
+                if (i > curFrom) {
+                    for(let q = 1; q <= i - curFrom; q++) { curHi = Math.max(curHi, highs[i-q]); curLo = Math.min(curLo, lows[i-q]); }
+                }
+            } else { curHi = Math.max(curHi, highs[i]); curLo = Math.min(curLo, lows[i]); }
+        } else if (curOpen) {
+            curOpen = false;
+            if (i - curFrom >= minBars) {
+                let joined = false;
+                if (pBox.length > 0) {
+                    let j = pBox.length - 1; let prevH = pBox[j].hi, prevL = pBox[j].lo;
+                    if (curLo <= prevH && curHi >= prevL) {
+                        pBox[j].hi = Math.max(prevH, curHi); pBox[j].lo = Math.min(prevL, curLo); pBox[j].from = i; joined = true;
+                    }
+                }
+                if (!joined) pBox.push({ from: curFrom, hi: curHi, lo: curLo, waitFrom: i });
+            }
+        }
+        for (let j = pBox.length - 1; j >= 0; j--) {
+            let b = pBox[j], up = closes[i] > b.hi, dn = closes[i] < b.lo;
+            if (up || dn) {
+                lastRight = i; let h = b.hi - b.lo, edge = up ? b.hi : b.lo, px = up ? edge + mult * h : edge - mult * h;
+                tLine.push({ px, up, from: i, edge, far: up ? b.lo : b.hi, rt: false });
+                markers.push({ time: times[i], position: up ? 'belowBar' : 'aboveBar', color: up ? '#2E8B60' : '#B5453C', shape: up ? 'arrowUp' : 'arrowDown', text: up ? 'RBT UP' : 'RBT DN' });
+                if (i === closes.length - 1) sig = up ? 'BULLISH' : 'BEARISH';
+                pBox.splice(j, 1); if (curOpen) curOpen = false;
+            } else if (i - b.waitFrom >= waitBrk) {
+                lastRight = Math.max(lastRight, i); pBox.splice(j, 1);
+            }
+        }
+        for (let j = tLine.length - 1; j >= 0; j--) {
+            let t = tLine[j], got = i > t.from && (t.up ? highs[i] >= t.px : lows[i] <= t.px), dead = i > t.from && (t.up ? closes[i] < t.far : closes[i] > t.far);
+            if (!t.rt && i > t.from && (t.up ? lows[i] <= t.edge : highs[i] >= t.edge)) {
+                t.rt = true; markers.push({ time: times[i], position: t.up ? 'belowBar' : 'aboveBar', color: '#3C4450', shape: 'circle', text: 'RT' });
+            }
+            if (got) {
+                markers.push({ time: times[i], position: t.up ? 'aboveBar' : 'belowBar', color: t.up ? '#2E8B60' : '#B5453C', shape: 'circle', text: '✓' });
+                tLine.splice(j, 1);
+            } else if (dead) {
+                markers.push({ time: times[i], position: t.up ? 'aboveBar' : 'belowBar', color: '#8C939E', shape: 'cross', text: '✕' });
+                tLine.splice(j, 1);
+            } else if (i - t.from >= expireAt) { tLine.splice(j, 1); }
+        }
+    }
+    return { markers, activeTargets: tLine, sig };
+};
+const [indicators, setIndicators] = useState({
+    qqe: true, utbot: true, rbt: true
   });
   
   const [theme, setTheme] = useState('dark');
