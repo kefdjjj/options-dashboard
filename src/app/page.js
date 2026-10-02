@@ -689,75 +689,165 @@ const findPivots = (data, window = 5, isHigh = true) => {
 // RBT helper func
 const calculateRBT = (highs, lows, closes, times) => {
     const win = 10, hist = 200, pct = 30, minBars = 15, waitBrk = 80, mult = 1.0, expireAt = 120;
-    const rng = new Array(closes.length).fill(null);
+    const boxes = [];
+    const targets = [];
+    const markers = [];
+    const activeTargetsArr = [];
+    let sig = 'NEUTRAL';
+    
+    if (closes.length < hist) {
+        return { markers, activeTargets: activeTargetsArr, sig };
+    }
+
+    const rng = new Float64Array(closes.length);
     for (let i = win - 1; i < closes.length; i++) {
-        let h = Math.max(...highs.slice(i - win + 1, i + 1));
-        let l = Math.min(...lows.slice(i - win + 1, i + 1));
-        rng[i] = (h - l) / closes[i];
+        let highest = highs[i];
+        let lowest = lows[i];
+        for (let j = 1; j < win; j++) {
+            if (highs[i - j] > highest) highest = highs[i - j];
+            if (lows[i - j] < lowest) lowest = lows[i - j];
+        }
+        rng[i] = (highest - lowest) / closes[i];
     }
-    const tight = new Array(closes.length).fill(false);
+
+    let curFrom = -1;
+    let lastRight = -1;
+    let curHi = -Infinity;
+    let curLo = Infinity;
+    let curOpen = false;
+
+    let activeBox = null;
+    let activeTargets = [];
+
+    const percentileNearestRank = (arr, p) => {
+        if (arr.length === 0) return 0;
+        const sorted = [...arr].sort((a, b) => a - b);
+        const index = Math.max(0, Math.min(sorted.length - 1, Math.round((p / 100) * (sorted.length - 1))));
+        return sorted[index];
+    };
+
     for (let i = hist; i < closes.length; i++) {
-        let windowRng = rng.slice(i - hist + 1, i + 1).filter(v => v !== null);
-        windowRng.sort((a, b) => a - b);
-        let rank = Math.round((pct / 100) * (windowRng.length - 1));
-        tight[i] = rng[i] <= windowRng[rank];
-    }
-    let curFrom = null, lastRight = -1, curHi = null, curLo = null, curOpen = false;
-    let pBox = [], tLine = [], markers = [], sig = 'NEUTRAL';
-    for (let i = hist; i < closes.length; i++) {
-        if (tight[i]) {
+        const currentRng = rng[i];
+        
+        const histSubset = [];
+        for (let j = 0; j < hist; j++) {
+            if (i - j >= 0) histSubset.push(rng[i - j]);
+        }
+        const thr = percentileNearestRank(histSubset, pct);
+        const tight = currentRng <= thr;
+        
+        if (tight) {
             if (!curOpen) {
-                curOpen = true; curFrom = Math.max(i - (win - 1), lastRight + 1);
-                curHi = highs[i]; curLo = lows[i];
+                curOpen = true;
+                curFrom = Math.max(i - (win - 1), lastRight + 1);
+                curHi = highs[i];
+                curLo = lows[i];
                 if (i > curFrom) {
-                    for(let q = 1; q <= i - curFrom; q++) { curHi = Math.max(curHi, highs[i-q]); curLo = Math.min(curLo, lows[i-q]); }
+                    for (let q = curFrom; q <= i; q++) {
+                        curHi = Math.max(curHi, highs[q]);
+                        curLo = Math.min(curLo, lows[q]);
+                    }
                 }
-            } else { curHi = Math.max(curHi, highs[i]); curLo = Math.min(curLo, lows[i]); }
+            } else {
+                curHi = Math.max(curHi, highs[i]);
+                curLo = Math.min(curLo, lows[i]);
+            }
         } else if (curOpen) {
             curOpen = false;
             if (i - curFrom >= minBars) {
                 let joined = false;
-                if (pBox.length > 0) {
-                    let j = pBox.length - 1; let prevH = pBox[j].hi, prevL = pBox[j].lo;
-                    if (curLo <= prevH && curHi >= prevL) {
-                        pBox[j].hi = Math.max(prevH, curHi); pBox[j].lo = Math.min(prevL, curLo); pBox[j].from = i; joined = true;
+                if (activeBox && activeBox.status === 'forming') {
+                    if (curLo <= activeBox.top && curHi >= activeBox.bottom) {
+                        activeBox.top = Math.max(activeBox.top, curHi);
+                        activeBox.bottom = Math.min(activeBox.bottom, curLo);
+                        activeBox.right = i;
+                        joined = true;
                     }
                 }
-                if (!joined) pBox.push({ from: curFrom, hi: curHi, lo: curLo, waitFrom: i });
+                if (!joined) {
+                    if (activeBox && activeBox.status === 'forming') {
+                        activeBox.status = 'expired';
+                    }
+                    activeBox = { left: curFrom, right: i - 1, top: curHi, bottom: curLo, status: 'forming' };
+                    boxes.push(activeBox);
+                }
             }
         }
-        for (let j = pBox.length - 1; j >= 0; j--) {
-            let b = pBox[j], up = closes[i] > b.hi, dn = closes[i] < b.lo;
+
+        if (activeBox && activeBox.status === 'forming') {
+            const up = closes[i] > activeBox.top;
+            const dn = closes[i] < activeBox.bottom;
             if (up || dn) {
-                lastRight = i; let h = b.hi - b.lo, edge = up ? b.hi : b.lo, px = up ? edge + mult * h : edge - mult * h;
-                tLine.push({ px, up, from: i, edge, far: up ? b.lo : b.hi, rt: false });
+                activeBox.status = up ? 'broken_up' : 'broken_down';
+                activeBox.right = i;
+                lastRight = i;
+                const h = activeBox.top - activeBox.bottom;
+                const edge = up ? activeBox.top : activeBox.bottom;
+                const px = up ? edge + (mult * h) : edge - (mult * h);
+                const newTarget = {
+                    price: px,
+                    type: up ? 'up' : 'down',
+                    fromTime: times[i],
+                    status: 'active',
+                    boxLeft: activeBox.left,
+                    fromIndex: i,
+                    rt: false
+                };
+                activeTargets.push(newTarget);
+                targets.push(newTarget);
+                
                 markers.push({ time: times[i], position: up ? 'belowBar' : 'aboveBar', color: up ? '#2E8B60' : '#B5453C', shape: up ? 'arrowUp' : 'arrowDown', text: up ? 'RBT UP' : 'RBT DN' });
                 
-                pBox.splice(j, 1); if (curOpen) curOpen = false;
-            } else if (i - b.waitFrom >= waitBrk) {
-                lastRight = Math.max(lastRight, i); pBox.splice(j, 1);
+                if (curOpen) curOpen = false;
+                activeBox = null;
+            } else if (i - activeBox.right >= waitBrk) {
+                lastRight = Math.max(lastRight, activeBox.right);
+                activeBox.status = 'expired';
+                activeBox = null;
+            } else {
+                activeBox.right = i;
             }
         }
-        for (let j = tLine.length - 1; j >= 0; j--) {
-            let t = tLine[j], got = i > t.from && (t.up ? highs[i] >= t.px : lows[i] <= t.px), dead = i > t.from && (t.up ? closes[i] < t.far : closes[i] > t.far);
-            if (!t.rt && i > t.from && (t.up ? lows[i] <= t.edge : highs[i] >= t.edge)) {
-                t.rt = true; markers.push({ time: times[i], position: t.up ? 'belowBar' : 'aboveBar', color: '#3C4450', shape: 'circle', text: 'RT' });
+        
+        for (let t of activeTargets) {
+            if (t.status !== 'active') continue;
+            if (i <= t.fromIndex) continue;
+            
+            const up = t.type === 'up';
+            const got = up ? highs[i] >= t.price : lows[i] <= t.price;
+            
+            const parentBox = boxes.find(b => b.left === t.boxLeft);
+            const far = parentBox ? (up ? parentBox.bottom : parentBox.top) : null;
+            const dead = far !== null && (up ? closes[i] < far : closes[i] > far);
+            const edge = parentBox ? (up ? parentBox.top : parentBox.bottom) : null;
+            
+            if (!t.rt && edge !== null && (up ? lows[i] <= edge : highs[i] >= edge)) {
+                t.rt = true;
+                markers.push({ time: times[i], position: up ? 'belowBar' : 'aboveBar', color: '#3C4450', shape: 'circle', text: 'RT' });
             }
+            
             if (got) {
-                markers.push({ time: times[i], position: t.up ? 'aboveBar' : 'belowBar', color: t.up ? '#2E8B60' : '#B5453C', shape: 'circle', text: '✓' });
-                tLine.splice(j, 1);
+                t.status = 'hit';
+                markers.push({ time: times[i], position: up ? 'aboveBar' : 'belowBar', color: up ? '#2E8B60' : '#B5453C', shape: 'circle', text: '✓' });
             } else if (dead) {
-                markers.push({ time: times[i], position: t.up ? 'aboveBar' : 'belowBar', color: '#8C939E', shape: 'cross', text: '✕' });
-                tLine.splice(j, 1);
-            } else if (i - t.from >= expireAt) { tLine.splice(j, 1); }
+                t.status = 'failed';
+                markers.push({ time: times[i], position: up ? 'aboveBar' : 'belowBar', color: '#8C939E', shape: 'cross', text: '✕' });
+            } else if (i - t.fromIndex >= expireAt) {
+                t.status = 'expired';
+            }
         }
     }
-        if (tLine.length > 0) {
-        let lastT = tLine[tLine.length - 1];
-        sig = lastT.up ? 'BULLISH' : 'BEARISH';
+    
+    for (let t of activeTargets) {
+        if (t.status === 'active') {
+            activeTargetsArr.push({ px: t.price, up: t.type === 'up' });
+            sig = t.type === 'up' ? 'BULLISH' : 'BEARISH';
+        }
     }
-    return { markers, activeTargets: tLine, sig };
+    
+    return { markers, activeTargets: activeTargetsArr, sig };
 };
+
 
 const calculateSignals = (rawCandles) => {
   if (!rawCandles || rawCandles.length === 0) return { signals: null, values: null };
